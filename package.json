@@ -1,0 +1,26 @@
+{
+  "name": "cryostat-thermal-model-public",
+  "version": "1.0.0-rc.1",
+  "description": "Illustrative interactive radial thermal-resistance model; its synthetic inputs do not represent a real cryostat.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "keywords": [
+    "cryogenics",
+    "heat-transfer",
+    "thermal-model",
+    "vacuum",
+    "multi-layer-insulation",
+    "scientific-visualization"
+  ],
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node tests/run.js",
+    "check": "python3 scripts/check_release.py",
+    "verify": "node tests/run.js && python3 scripts/check_release.py",
+    "reference": "python3 reference/generate_reference.py"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,28 @@
+# OS metadata
+.DS_Store
+._*
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Dependencies (this project has none; the entry guards against accidents)
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local secrets and environment
+.env
+.env.*
+*.pem
+
+# Local build and scratch output
+dist/
+build/
+*.log
