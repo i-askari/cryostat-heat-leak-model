@@ -12,11 +12,8 @@
 
 <header class="app-header">
   <h1>Cryostat Thermal Model</h1>
-  <p class="subtitle">
-    Steady-state radial heat leak into an insulated cylindrical cryogenic enclosure.
-    Computed in your browser from the parameters you set. Defaults are synthetic
-    illustrations, not a real cryostat design.
-  </p>
+  <p class="subtitle">Steady-state radial heat leak into an insulated cylindrical cryogenic HTS cable.</p>
+  <p class="subtitle-note">Computed in your browser from the parameters you set. Defaults are synthetic illustrations, not a real cryostat design.</p>
   <div class="header-actions">
     <button id="btn-copy-link" type="button" title="Copy a link that reproduces this exact parameter set">Copy link</button>
     <button id="btn-reset" type="button" title="Restore the illustrative parameter set">Reset</button>
@@ -40,13 +37,15 @@
         <h2 class="panel-title" id="viz-title" style="margin:0">Radial cross-section</h2>
         <span class="hint">Click a layer for the physics behind it</span>
       </div>
-      <div class="cross-section-wrap" id="cross-section-host"></div>
+      <p class="diagram-scroll-hint cross-section-hint" id="cross-scroll-hint">Swipe horizontally to see all labels.</p>
+      <div class="cross-section-wrap" id="cross-section-host" role="region" tabindex="0" aria-label="Scrollable radial cross-section" aria-describedby="cross-scroll-hint"></div>
       <div class="viz-legend" id="cross-section-legend"></div>
     </section>
 
     <section class="panel" aria-labelledby="network-title">
       <h2 class="panel-title" id="network-title">Thermal network</h2>
-      <div class="scroll-x"><div id="network-host"></div></div>
+      <p class="diagram-scroll-hint network-hint" id="network-scroll-hint">Swipe horizontally to see the full network.</p>
+      <div class="scroll-x" role="region" tabindex="0" aria-label="Scrollable thermal network" aria-describedby="network-scroll-hint"><div id="network-host"></div></div>
     </section>
 
     <section class="panel" aria-labelledby="detail-title">
@@ -90,7 +89,7 @@
       <h2>What this model is</h2>
       <p>
         A one-dimensional, steady-state, radial thermal-resistance network for a cylindrical
-        vacuum-insulated enclosure. It is a screening tool for exploring how vacuum quality,
+        vacuum-insulated cryogenic HTS cable. It is a screening tool for exploring how vacuum quality,
         insulation and geometry trade against one another, not a cryostat design solver.
       </p>
     </div>
@@ -100,9 +99,9 @@
         <li>Axial conduction, end effects, supports, ports, seals and penetrations</li>
         <li>Joints and ohmic heating</li>
         <li>Transient behaviour and coolant fluid dynamics</li>
-        <li>MLI spacer and contact conduction, compression and installation quality</li>
-        <li>Temperature-dependent conductivity, emissivity and convection</li>
-        <li>Radiation across the inner gas gap, and any gradient within the cold mass</li>
+        <li>Detailed MLI spacer contacts, compression, seams and installation quality</li>
+        <li>Temperature-dependent wall conductivity, emissivity and convection</li>
+        <li>Radiation across the inner gas gap and the copper former's temperature profile</li>
       </ul>
     </div>
     <div>

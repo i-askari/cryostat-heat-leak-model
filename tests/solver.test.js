@@ -1,8 +1,36 @@
 import { assert, describe, it } from './harness.js';
-import { DEFAULT_INPUTS } from '../src/model/constants.js';
+import { COPPER_COOLANT_OFFSET, DEFAULT_INPUTS } from '../src/model/constants.js';
 import { calculateCryostat, solve } from '../src/model/solver.js';
 
 const withInputs = (overrides) => ({ ...DEFAULT_INPUTS, ...overrides });
+
+describe('prescribed copper and coolant boundary', () => {
+  it('uses 77.01 K for the solved boundary and reports the independently imposed 77.00 K coolant', () => {
+    const r = solve(DEFAULT_INPUTS);
+    assert.equal(COPPER_COOLANT_OFFSET, 0.01);
+    assert.equal(DEFAULT_INPUTS.T_cold, 77.01);
+    assert.equal(r.T_copper_outer, 77.01);
+    assert.near(r.T_coolant, 77.00, 1e-12);
+    assert.near(r.driving_difference, DEFAULT_INPUTS.T_amb - 77.01, 1e-12);
+    assert.near(r.Q, (DEFAULT_INPUTS.T_amb - 77.01) / r.R_total, 1e-12);
+    assert.ok(Math.abs(r.Q - (DEFAULT_INPUTS.T_amb - 77.00) / r.R_total) > 1e-8,
+      'coolant is not the boundary of the calculated network');
+    assert.near(r.dT_inner_gap, r.T4 - r.T_copper_outer, 1e-12);
+    assert.near(r.Q_inner_gap, r.dT_inner_gap / r.R_gap, 1e-12);
+    assert.near(r.Q_inner_gap * r.R_gap, r.Q * r.R_gap, DEFAULT_INPUTS.tolerance);
+    assert.equal('R_copper' in r, false, 'the imposed copper drop must not create a fitted resistance');
+    assert.equal('R_gap_rad' in r, false, 'inner-gap radiation is neglected');
+  });
+
+  it('keeps T_cold compatible with arbitrary notebook/reference boundary inputs', () => {
+    for (const T_cold of [77, 105, 130]) {
+      const r = solve(withInputs({ T_cold }));
+      assert.equal(r.T_copper_outer, T_cold);
+      assert.near(r.T_coolant, T_cold - COPPER_COOLANT_OFFSET, 1e-12);
+      assert.near(r.Q, (DEFAULT_INPUTS.T_amb - T_cold) / r.R_total, 1e-12);
+    }
+  });
+});
 
 describe('solver convergence', () => {
   it('converges at every pressure across twelve decades', () => {
@@ -48,6 +76,11 @@ describe('solver convergence', () => {
       const r = solve(inputs);
       for (const [key, value] of Object.entries(r)) {
         if (typeof value === 'number') {
+          // An open contact path is intentionally represented by Infinity.
+          if (key === 'R_solid_MLI' && inputs.n_mli === 0) {
+            assert.equal(value, Infinity);
+            continue;
+          }
           assert.finite(value, `${key} should be finite for P=${inputs.P_vacuum}`);
         }
       }
@@ -84,21 +117,20 @@ describe('energy balance', () => {
       const inputs = withInputs({ P_vacuum: P });
       const r = solve(inputs);
 
-      // Exact: within a parallel pair the branches partition the flow
-      // through that pair.
+      // Exact: each parallel network's branches partition its flow.
       assert.close(
         r.Q_conv + r.Q_rad_ambient, r.dT_ambient / r.R_ambient, 1e-12,
         `ambient branches at ${P} Pa`,
       );
       assert.close(
-        r.Q_gas + r.Q_rad_vacuum, r.dT_vacuum / r.R_vacuum, 1e-12,
+        r.Q_gas + r.Q_rad_vacuum + r.Q_solid_MLI, r.dT_vacuum / r.R_vacuum, 1e-12,
         `vacuum branches at ${P} Pa`,
       );
-      assert.close(r.gas_fraction + r.radiation_fraction, 1, 1e-12, `fractions at ${P} Pa`);
+      assert.close(r.gas_fraction + r.radiation_fraction + r.fraction_solid_MLI, 1, 1e-12, `fractions at ${P} Pa`);
 
       // And that pair carries the series heat flow, to solver tolerance.
       assert.near(
-        r.Q_gas + r.Q_rad_vacuum, r.Q, r.Q * 1e-4,
+        r.Q_gas + r.Q_rad_vacuum + r.Q_solid_MLI, r.Q, r.Q * 1e-4,
         `vacuum branch total against series Q at ${P} Pa`,
       );
     }
@@ -119,7 +151,23 @@ describe('energy balance', () => {
     const r = solve(DEFAULT_INPUTS);
     const rebuilt = r.R_ambient + r.R_cond_ow + r.R_vacuum + r.R_cond_iw + r.R_gap;
     assert.close(rebuilt, r.R_total, 1e-12);
-    assert.close(1 / (1 / r.R_gas + 1 / r.R_rad), r.R_vacuum, 1e-12);
+    assert.close(1 / (1 / r.R_gas + 1 / r.R_rad + 1 / r.R_solid_MLI), r.R_vacuum, 1e-12);
+  });
+
+  it('removes the MLI contact branch only when no blanket exists', () => {
+    for (const P of [1e-6, 0.75, 1e4]) {
+      const absent = solve(withInputs({ n_mli: 0, P_vacuum: P }));
+      const single = solve(withInputs({ n_mli: 1, P_vacuum: P }));
+      assert.ok(absent.finite && absent.converged);
+      assert.equal(absent.R_solid_MLI, Infinity);
+      assert.equal(absent.Q_solid_MLI, 0);
+      assert.equal(absent.fraction_solid_MLI, 0);
+      const checked = calculateCryostat(withInputs({ n_mli: 0, P_vacuum: P }));
+      assert.ok(checked.ok, 'an open contact path is a valid physical case');
+      assert.equal(checked.result.Q_solid_MLI, 0);
+      assert.greater(single.Q_solid_MLI, 0);
+      assert.close(1 / (1 / absent.R_gas + 1 / absent.R_rad), absent.R_vacuum, 1e-12);
+    }
   });
 });
 
@@ -230,10 +278,10 @@ describe('physical direction of the result', () => {
     }
   });
 
-  it('saturates at a radiation-limited floor as pressure approaches zero', () => {
+  it('saturates at a radiation-and-contact floor as pressure approaches zero', () => {
     const a = solve(withInputs({ P_vacuum: 1e-9 })).Q;
     const b = solve(withInputs({ P_vacuum: 1e-11 })).Q;
-    assert.close(a, b, 1e-3, 'below the gas contribution, only radiation is left');
+    assert.close(a, b, 1e-3, 'below the gas contribution, radiation and contact remain');
     assert.greater(a, 0);
   });
 

@@ -44,6 +44,7 @@
   /* Mechanism channels */
   --gas: #0f7b6c;
   --radiation: #8a4f9e;
+  --mli-contact: #8a5a00;
   --convection: #b06a3b;
 
   /* Gas regimes */
@@ -91,6 +92,7 @@
 
     --gas: #45b9a6;
     --radiation: #b98acd;
+    --mli-contact: #e0bb61;
     --convection: #d29160;
 
     --regime-continuum: #6fb3dd;
@@ -161,7 +163,8 @@ a {
   text-transform: uppercase;
 }
 
-.app-header .subtitle {
+.app-header .subtitle,
+.app-header .subtitle-note {
   color: var(--text-muted);
   font-size: 13px;
   flex: 1 1 320px;
@@ -193,7 +196,9 @@ a {
   border-top: 1px solid var(--border);
 }
 
-@media (max-width: 1100px) {
+/* The network needs roughly 960 px to stay legible. Give the visualisation
+   the full row before the three-column layout would clip it on desktops. */
+@media (max-width: 1700px) {
   .app-main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .column-viz { grid-column: 1 / -1; order: -1; }
 }
@@ -500,11 +505,11 @@ button.link {
 
 /* ------------------------------------------------------------ cross-sec -- */
 
-.viz-panel { background: var(--panel); padding: 14px 16px 10px; flex: 1; }
+.viz-panel { background: var(--panel); padding: 14px 16px 10px; }
 
-.cross-section-wrap { position: relative; }
+.cross-section-wrap { position: relative; overflow-x: auto; }
 
-.cross-section { width: 100%; height: auto; display: block; touch-action: manipulation; }
+.cross-section { width: 100%; min-width: 620px; max-width: 900px; height: auto; display: block; margin-inline: auto; touch-action: manipulation; }
 
 .cross-section .layer-hit { cursor: pointer; }
 .cross-section .layer-hit:focus-visible { outline: none; }
@@ -563,15 +568,21 @@ button.link {
 
 .viz-toolbar .hint { font-size: 11.5px; color: var(--text-faint); }
 
+.diagram-scroll-hint { display: none; color: var(--text-muted); font-size: 11.5px; margin: 6px 0; }
+@media (max-width: 660px) { .cross-section-hint { display: block; } }
+@media (max-width: 1000px) { .network-hint { display: block; } }
+
 /* --------------------------------------------------------------- network -- */
 
 .network {
   width: 100%;
+  max-width: 1200px;
   height: auto;
   display: block;
+  margin-inline: auto;
   /* Below this width the annotations stop being legible, so the container
      scrolls instead of shrinking the diagram further. */
-  min-width: 560px;
+  min-width: 960px;
 }
 .network text { font-family: var(--font-sans); font-size: 10.5px; fill: var(--text-muted); }
 .network .node-label { fill: var(--text); font-size: 11px; }

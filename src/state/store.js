@@ -116,7 +116,8 @@ export function createStore() {
 
     /**
      * One-at-a-time sensitivity: how much does Q move if each parameter is
-     * scaled by +/- 20 percent, everything else held fixed?
+   * scaled by +/- 20 percent, everything else held fixed? MLI is discrete:
+   * perturb by at least one whole layer, clamped at zero on the low side.
      */
     get sensitivity() {
       if (!derived.calc.ok) return [];
@@ -185,7 +186,7 @@ export function createStore() {
  */
 function computeSensitivity(inputs) {
   const base = calculateCryostat(inputs);
-  if (!base.ok) return [];
+  if (!base.ok || !base.result.converged) return [];
   const Q0 = base.result.Q_per_length;
 
   /** @type {{key: string, label: string}[]} */
@@ -196,25 +197,37 @@ function computeSensitivity(inputs) {
     { key: 'd_vacuum_gap', label: 'Vacuum gap' },
     { key: 'd_inner_gap', label: 'Inner gas gap' },
     { key: 'P_inner_gap', label: 'Inner gap pressure' },
-    { key: 'T_cold', label: 'Cold boundary' },
+    { key: 'T_cold', label: 'Copper boundary' },
     { key: 'T_amb', label: 'Ambient' },
     { key: 'h_conv', label: 'Convection coeff.' },
-    { key: 'r_cu', label: 'Cold mass radius' },
+    { key: 'r_cu', label: 'Copper outer radius' },
     { key: 'C', label: 'Gas constant C' },
-    { key: 'k_outer_wall', label: 'Wall conductivity' },
+    { key: 'k_air', label: 'Main-gap air conductivity' },
+    { key: 'mfp_coefficient', label: 'Mean free path coefficient' },
+    { key: 'T_inner_gap', label: 'Inner-gap gas temperature' },
+    { key: 'd_air', label: 'Molecular diameter' },
+    { key: 't_inner_wall', label: 'Inner wall thickness' },
+    { key: 't_outer_wall', label: 'Outer wall thickness' },
+    { key: 'k_outer_wall', label: 'Outer wall conductivity' },
+    { key: 'k_inner_wall', label: 'Inner wall conductivity' },
   ];
 
   const out = [];
   for (const { key, label } of candidates) {
     const nominal = inputs[key];
-    const low = perturb(inputs, key, nominal * 0.8);
-    const high = perturb(inputs, key, nominal * 1.2);
+    const layerStep = key === 'n_mli' ? Math.max(1, Math.round(nominal * 0.2)) : null;
+    const lowValue = layerStep === null ? nominal * 0.8 : Math.max(0, nominal - layerStep);
+    const highValue = layerStep === null ? nominal * 1.2 : nominal + layerStep;
+    const low = perturb(inputs, key, lowValue);
+    const high = perturb(inputs, key, highValue);
     if (low === null || high === null) continue;
 
     out.push({
       key,
       label,
       nominal,
+      lowValue,
+      highValue,
       low: low - Q0,
       high: high - Q0,
       span: Math.abs(high - low),
@@ -225,9 +238,9 @@ function computeSensitivity(inputs) {
 }
 
 function perturb(inputs, key, value) {
-  const patched = { ...inputs, [key]: key === 'n_mli' ? Math.round(value) : value };
+  const patched = { ...inputs, [key]: value };
   const out = calculateCryostat(patched);
-  return out.ok ? out.result.Q_per_length : null;
+  return out.ok && out.result.converged ? out.result.Q_per_length : null;
 }
 
 // --- URL round-trip ----------------------------------------------------

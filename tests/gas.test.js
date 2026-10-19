@@ -70,6 +70,31 @@ describe('effective gas conductivity', () => {
     assert.less(effectiveGasConductivity(K_AIR, lambda, D, C), K_AIR);
   });
 
+  it('includes N+1 in the main-gap transition and molecular branches', () => {
+    for (const n of [0, 1, 8, 32]) {
+      const transitionLambda = 0.5 * D;
+      const molecularLambda = 15 * D;
+      const expectedTransition = K_AIR / (1 + (n + 1) * C * transitionLambda / D);
+      const expectedMolecular = K_AIR * D / ((n + 1) * C * molecularLambda);
+      assert.close(effectiveGasConductivity(K_AIR, transitionLambda, D, C, n), expectedTransition, 1e-15);
+      assert.close(effectiveGasConductivity(K_AIR, molecularLambda, D, C, n), expectedMolecular, 1e-15);
+    }
+  });
+
+  it('keeps continuum conductivity independent of layer count', () => {
+    for (const n of [0, 1, 8, 32]) {
+      assert.close(effectiveGasConductivity(K_AIR, 0.005 * D, D, C, n), K_AIR, 1e-15);
+    }
+  });
+
+  it('applies the transition branch at both exact regime boundaries with layers', () => {
+    for (const kn of [0.01, 10]) {
+      const n = 8;
+      assert.close(effectiveGasConductivity(K_AIR, kn * D, D, C, n),
+        K_AIR / (1 + (n + 1) * C * kn), 1e-15);
+    }
+  });
+
   it('becomes proportional to pressure in the free-molecular regime', () => {
     const kAt = (P) => effectiveGasConductivity(K_AIR, meanFreePathFitted(P, MFP_COEFFICIENT), D, C);
     const p1 = 1e-5;

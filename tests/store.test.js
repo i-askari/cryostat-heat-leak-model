@@ -12,7 +12,9 @@
 
 import { assert, describe, it } from './harness.js';
 import { DEFAULT_INPUTS } from '../src/model/constants.js';
+import { calculateCryostat } from '../src/model/solver.js';
 import { createStore } from '../src/state/store.js';
+import { sweepWarning } from '../src/ui/analysis.js';
 
 describe('store: single-point result', () => {
   it('starts from the default inputs', () => {
@@ -94,6 +96,30 @@ describe('store: memo invalidation', () => {
       store.derived.pressureSweep === first,
       'the swept variable must not invalidate its own sweep',
     );
+  });
+
+  it('updates cached pressure-sweep gas and contact branches when MLI changes', () => {
+    const store = createStore();
+    const first = store.derived.pressureSweep;
+    const transition = first.findIndex((p) => p.result.regime === 'transition');
+    assert.ok(transition >= 0);
+    store.setInput('n_mli', 32);
+    const second = store.derived.pressureSweep;
+    assert.ok(first !== second);
+    assert.less(second[transition].result.k_eff_gas, first[transition].result.k_eff_gas);
+    assert.ok(second[transition].result.Q_solid_MLI !== first[transition].result.Q_solid_MLI);
+  });
+
+  it('updates both cached sweeps and sensitivity when inner-gap temperature changes', () => {
+    const store = createStore();
+    const pressure = store.derived.pressureSweep;
+    const mli = store.derived.mliSweep;
+    const sensitivity = store.derived.sensitivity;
+    store.setInput('T_inner_gap', 90);
+    assert.ok(store.derived.pressureSweep !== pressure);
+    assert.ok(store.derived.mliSweep !== mli);
+    assert.ok(store.derived.sensitivity !== sensitivity);
+    assert.ok(store.derived.pressureSweep[0].result.k_eff_gap !== pressure[0].result.k_eff_gap);
   });
 
   it('keeps the MLI sweep independent of the layer count', () => {
@@ -189,6 +215,63 @@ describe('store: sensitivity screening', () => {
     const cold = store.derived.sensitivity.find((r) => r.key === 'T_cold');
     assert.equal(cold, undefined, 'an unevaluable perturbation must be skipped');
     assert.greater(store.derived.sensitivity.length, 0, 'other rows still reported');
+  });
+
+  it('omits an unconverged perturbation even when the selected solve converges', () => {
+    // A low cap creates a distinct, reproducible perturbation-only failure.
+    const store = createStore();
+    store.setInputs({
+      n_mli: 52, eps_al: 0.9, P_vacuum: 0.3, d_vacuum_gap: 0.0017,
+      P_inner_gap: 0.0003, T_inner_gap: 210, T_amb: 330, T_cold: 184,
+      max_iterations: 4,
+    });
+    assert.ok(store.derived.calc.ok && store.derived.calc.result.converged);
+    const perturbed = calculateCryostat({ ...store.inputs, d_air: store.inputs.d_air * 1.2 });
+    assert.ok(perturbed.ok && !perturbed.result.converged, 'the perturbation must exhaust the cap');
+    assert.equal(store.derived.sensitivity.find((row) => row.key === 'd_air'), undefined);
+    assert.greater(store.derived.sensitivity.length, 0, 'other converged rows remain available');
+  });
+
+  it('withholds the screening when the base solution does not converge', () => {
+    const store = createStore();
+    store.setInput('max_iterations', 1);
+    assert.ok(store.derived.calc.ok && !store.derived.calc.result.converged);
+    assert.equal(store.derived.sensitivity.length, 0);
+  });
+
+  it('uses at least a one-layer MLI perturbation, clamped at zero', () => {
+    for (const n of [0, 1, 2, 16]) {
+      const store = createStore();
+      store.setInput('n_mli', n);
+      const row = store.derived.sensitivity.find((candidate) => candidate.key === 'n_mli');
+      assert.ok(row, `MLI row for ${n} layers`);
+      const step = Math.max(1, Math.round(n * 0.2));
+      assert.equal(row.lowValue, Math.max(0, n - step));
+      assert.equal(row.highValue, n + step);
+      assert.ok(row.highValue > row.nominal, 'the upper perturbation must change the layer count');
+      if (n > 0) assert.ok(row.lowValue < row.nominal, 'the lower perturbation must change the layer count');
+      const lower = calculateCryostat({ ...store.inputs, n_mli: row.lowValue });
+      const upper = calculateCryostat({ ...store.inputs, n_mli: row.highValue });
+      assert.close(row.low, lower.result.Q_per_length - store.derived.calc.result.Q_per_length, 1e-12);
+      assert.close(row.high, upper.result.Q_per_length - store.derived.calc.result.Q_per_length, 1e-12);
+      assert.greater(row.span, 0, `the ${n}-layer screening must not report a false zero span`);
+    }
+  });
+});
+
+describe('analysis: sweep convergence warnings', () => {
+  it('reports failed counts and avoids double-counting each point', () => {
+    const points = [
+      { result: { converged: true, finite: true } },
+      { result: { converged: false, finite: true } },
+      { result: { converged: false, finite: false } },
+      { result: { converged: true, finite: false } },
+    ];
+    assert.equal(sweepWarning(points, 'Pressure'),
+      'Pressure sweep: 3 of 4 points did not converge or produced non-finite results. Failed points are omitted from plots. CSV retains them with diagnostic flags.');
+    assert.ok(sweepWarning(points, 'MLI').startsWith('MLI sweep: 3 of 4'));
+    assert.equal(sweepWarning(points.slice(0, 1), 'Pressure'), null);
+    assert.equal(sweepWarning([], 'Pressure'), null);
   });
 });
 

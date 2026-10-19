@@ -7,9 +7,11 @@
  * picture cannot drift away from what is actually being solved.
  */
 
+import { COPPER_COOLANT_OFFSET } from './constants.js';
+
 /**
  * @typedef {object} Geometry
- * @property {number} r_cu      Copper cold-mass outer radius [m]
+ * @property {number} r_cu      Copper former outer radius [m]
  * @property {number} r_in_in   Inner wall, inner radius [m]
  * @property {number} r_in_ow   Inner wall, outer radius [m]
  * @property {number} r_ow_in   Outer wall, inner radius [m]
@@ -49,11 +51,11 @@ export function resolveGeometry(inputs) {
 
 /**
  * Field-by-field constraints. `min` is exclusive: a zero-thickness wall or a
- * zero-radius cold mass would make ln(r_o/r_i) degenerate, so both are
+ * zero-radius copper former would make ln(r_o/r_i) degenerate, so both are
  * rejected rather than allowed to produce an infinite or zero resistance.
  */
 const CONSTRAINTS = [
-  { key: 'r_cu', label: 'Copper radius', min: 0, unit: 'm' },
+  { key: 'r_cu', label: 'Copper outer radius', min: 0, unit: 'm' },
   { key: 'd_inner_gap', label: 'Inner gas gap', min: 0, unit: 'm' },
   { key: 't_inner_wall', label: 'Inner wall thickness', min: 0, unit: 'm' },
   { key: 'd_vacuum_gap', label: 'Vacuum gap', min: 0, unit: 'm' },
@@ -62,7 +64,7 @@ const CONSTRAINTS = [
   { key: 'P_vacuum', label: 'Vacuum pressure', min: 0, unit: 'Pa' },
   { key: 'P_inner_gap', label: 'Inner gap pressure', min: 0, unit: 'Pa' },
   { key: 'T_amb', label: 'Ambient temperature', min: 0, unit: 'K' },
-  { key: 'T_cold', label: 'Cold boundary temperature', min: 0, unit: 'K' },
+  { key: 'T_cold', label: 'Copper outer-surface temperature', min: COPPER_COOLANT_OFFSET, unit: 'K' },
   { key: 'k_outer_wall', label: 'Outer wall conductivity', min: 0, unit: 'W/(m K)' },
   { key: 'k_inner_wall', label: 'Inner wall conductivity', min: 0, unit: 'W/(m K)' },
   { key: 'k_air', label: 'Air conductivity', min: 0, unit: 'W/(m K)' },
@@ -85,7 +87,7 @@ const CONSTRAINTS = [
  *
  * Errors mean the model cannot produce a meaningful number and must not be
  * run. Warnings mean the model will run but the result is outside the range
- * the Version 1 formulation can be trusted in.
+ * the model's simplifying assumptions may be inappropriate.
  *
  * @param {import('./constants.js').ModelInputs} inputs
  * @returns {{errors: ValidationIssue[], warnings: ValidationIssue[]}}
@@ -103,7 +105,9 @@ export function validateInputs(inputs) {
     } else if (v <= c.min) {
       errors.push({
         key: c.key,
-        message: `${c.label} must be greater than ${c.min} ${c.unit}.`,
+        message: c.key === 'T_cold'
+          ? `Copper outer-surface temperature must exceed ${COPPER_COOLANT_OFFSET} K so the prescribed coolant is above 0 K.`
+          : `${c.label} must be greater than ${c.min} ${c.unit}.`,
       });
     }
   }
@@ -132,7 +136,7 @@ export function validateInputs(inputs) {
     if (inputs.T_cold >= inputs.T_amb) {
       errors.push({
         key: 'T_cold',
-        message: 'Cold boundary temperature must be below ambient temperature.',
+        message: 'Copper outer-surface temperature must be below ambient temperature.',
       });
     }
   }

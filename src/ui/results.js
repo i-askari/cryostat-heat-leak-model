@@ -57,7 +57,7 @@ export function renderResults(host, store) {
       el('span', { class: 'unit', text: 'W/m' }),
       el('span', {
         class: 'secondary',
-        text: `${sig(result.Q, 3)} W over the modelled ${sig(inputs.length, 3)} m section`,
+        text: `${sig(result.Q, 3)} W into the copper boundary over ${sig(inputs.length, 3)} m`,
       }),
     ]),
 
@@ -69,16 +69,25 @@ export function renderResults(host, store) {
     // --- key numbers ---------------------------------------------------
     el('dl', { class: 'result-grid', style: { marginTop: '12px' } }, [
       row('Total resistance', `${sig(result.R_total, 4)} K/W`),
-      row('Driving difference', `${sig(inputs.T_amb - inputs.T_cold, 4)} K`),
-      row('Vacuum pressure', formatPressure(inputs.P_vacuum).combined),
-      row('Knudsen number', sig(result.Kn, 3)),
-      rowNode('Gas regime', el('span', {
+      row('Driving difference', `${sig(result.driving_difference, 4)} K`),
+      row('Main vacuum pressure', formatPressure(inputs.P_vacuum).combined),
+      row('Main-gap Knudsen number', sig(result.Kn, 3)),
+      rowNode('Main-gap gas regime', el('span', {
         class: `badge ${result.regime}`,
         text: regimeLabel(result.regime),
       })),
+      row('Inner-gap pressure', formatPressure(inputs.P_inner_gap).combined),
+      row('Inner-gap gas temperature', `${temperature(inputs.T_inner_gap)} K`),
+      row('Inner-gap Knudsen number', sig(result.Kn_gap, 3)),
+      rowNode('Inner-gap gas regime', el('span', {
+        class: `badge ${result.regime_gap}`,
+        text: regimeLabel(result.regime_gap),
+      })),
+      row('Inner-gap gas resistance', `${sig(result.R_gap, 3)} K/W`),
       row('MLI layers', String(inputs.n_mli)),
       row('Heat via residual gas', `${sig(result.Q_gas, 3)} W  (${percent(result.gas_fraction)})`),
       row('Heat via radiation', `${sig(result.Q_rad_vacuum, 3)} W  (${percent(result.radiation_fraction)})`),
+      row('Heat via MLI contact', `${sig(result.Q_solid_MLI, 3)} W  (${percent(result.fraction_solid_MLI)})`),
     ]),
 
     // --- temperatures --------------------------------------------------
@@ -88,6 +97,10 @@ export function renderResults(host, store) {
       text: 'Interface temperatures',
     }),
     temperatureTable(result),
+    el('p', {
+      class: 'panel-note',
+      text: 'The copper outer surface is the prescribed model boundary. The 0.01 K coolant-to-surface difference is imposed, not a calculated copper temperature drop or a separately calculated coolant heat load.',
+    }),
 
     // --- solver status -------------------------------------------------
     el('div', { class: 'status-line', style: { marginTop: '12px' } }, [
@@ -120,7 +133,7 @@ function temperatureTable(result) {
         el('th', { text: 'K', style: { textAlign: 'right' } }),
       ]),
     ]),
-    el('tbody', {}, INTERFACE_POINTS.map((point) =>
+    el('tbody', {}, [...INTERFACE_POINTS.map((point) =>
       el('tr', {}, [
         el('td', { class: 'mono', text: point.symbol }),
         el('td', {}, [
@@ -128,8 +141,14 @@ function temperatureTable(result) {
           point.name,
           el('div', { class: 'location', text: point.where }),
         ]),
-        el('td', { class: 'num', text: temperature(temperatureAt(point, result)) }),
-      ]))),
+        el('td', { class: 'num', text: point.key === 'T_cold'
+          ? result.T_copper_outer.toFixed(2) : temperature(temperatureAt(point, result)) }),
+      ])),
+    el('tr', {}, [
+      el('td', { class: 'mono', text: '—' }),
+      el('td', {}, ['LN₂ coolant channel', el('div', { class: 'location', text: 'prescribed separately' })]),
+      el('td', { class: 'num', text: result.T_coolant.toFixed(2) }),
+    ])]),
   ]);
 }
 

@@ -2,10 +2,10 @@
  * Resistance breakdown.
  *
  * Series resistances add, so their share of the total is meaningful and the
- * bars are drawn to that scale. The vacuum gap is a parallel pair, and the
- * two branch resistances emphatically do not add: showing them as slices of
+ * bars are drawn to that scale. The vacuum gap has three parallel paths, and
+ * their branch resistances emphatically do not add: showing them as slices of
  * the same pie would be wrong. They are drawn instead against the branch
- * that dominates the pair, with the combined value shown separately.
+ * that dominates the group, with the combined value shown separately.
  */
 
 import { el, replace } from '../utils/dom.js';
@@ -23,18 +23,19 @@ export function renderBreakdown(host, store) {
   }
 
   const seriesTerms = [
-    { label: 'Ambient film', value: result.R_ambient, color: 'var(--convection)' },
-    { label: 'Outer wall', value: result.R_cond_ow, color: 'var(--metal-dark)' },
-    { label: 'Vacuum gap', value: result.R_vacuum, color: 'var(--gas)' },
-    { label: 'Inner wall', value: result.R_cond_iw, color: 'var(--metal-dark)' },
-    { label: 'Inner gas gap', value: result.R_gap, color: 'var(--cold)' },
+    { key: 'R_ambient', label: 'Ambient film', value: result.R_ambient, color: 'var(--convection)' },
+    { key: 'R_cond_ow', label: 'Outer wall', value: result.R_cond_ow, color: 'var(--metal-dark)' },
+    { key: 'R_vacuum', label: 'Vacuum gap', value: result.R_vacuum, color: 'var(--gas)' },
+    { key: 'R_cond_iw', label: 'Inner wall', value: result.R_cond_iw, color: 'var(--metal-dark)' },
+    { key: 'R_gap', label: 'Inner gas gap', value: result.R_gap, color: 'var(--cold)' },
   ];
 
   // Series resistances add, so each one's share of the total is meaningful and
   // the bars are drawn to that share: the bars sum to the whole. Using the
   // largest term instead would make the bar and the number beside it disagree
   // about what they are a fraction of.
-  const branchMax = Math.max(result.R_gas, result.R_rad);
+  const branchMax = Math.max(result.R_gas, result.R_rad,
+    Number.isFinite(result.R_solid_MLI) ? result.R_solid_MLI : 0);
 
   replace(
     host,
@@ -43,8 +44,8 @@ export function renderBreakdown(host, store) {
       ...seriesTerms.map((term) => bar({
         label: term.label,
         value: `${sig(term.value, 3)}`,
-        fraction: term.value / result.R_total,
-        share: term.value / result.R_total,
+        fraction: result.resistance_shares[term.key],
+        share: result.resistance_shares[term.key],
         color: term.color,
       })),
     ]),
@@ -76,15 +77,24 @@ export function renderBreakdown(host, store) {
         color: 'var(--radiation)',
         sub: true,
       }),
+      bar({
+        label: 'MLI solid / contact',
+        value: Number.isFinite(result.R_solid_MLI) ? sig(result.R_solid_MLI, 3) : 'No blanket',
+        fraction: Number.isFinite(result.R_solid_MLI) ? result.R_solid_MLI / branchMax : 0,
+        share: null,
+        color: 'var(--mli-contact)',
+        sub: true,
+      }),
     ]),
 
     el('p', {
       class: 'panel-note',
       text:
-        `Combined in parallel: ${sig(result.R_vacuum, 3)} K/W, which is smaller than either `
-        + 'branch. Because they are parallel, these two cannot be read as shares of a total; '
+        `Combined in parallel: ${sig(result.R_vacuum, 3)} K/W, which is smaller than any `
+        + 'active branch. Because they are parallel, these cannot be read as shares of a total; '
         + `what they do split is the heat crossing the gap, ${percent(result.gas_fraction)} `
-        + `through the gas and ${percent(result.radiation_fraction)} by radiation.`,
+        + `through the gas, ${percent(result.radiation_fraction)} by radiation, and `
+        + `${percent(result.fraction_solid_MLI)} through MLI contact conduction.`,
     }),
   );
 }
@@ -96,7 +106,7 @@ function bar({ label, value, fraction, share, color, sub = false }) {
       el('div', {
         class: 'bar',
         style: {
-          width: `${Math.max(Math.min(fraction * 100, 100), 0.5)}%`,
+          width: `${fraction > 0 ? Math.max(Math.min(fraction * 100, 100), 0.5) : 0}%`,
           background: color,
           opacity: sub ? '0.55' : '0.8',
         },
@@ -104,7 +114,7 @@ function bar({ label, value, fraction, share, color, sub = false }) {
     ]),
     el('span', {
       class: 'num',
-      title: `${value} K/W`,
+      title: value === 'No blanket' ? value : `${value} K/W`,
       text: share === null ? value : percent(share),
     }),
   ]);

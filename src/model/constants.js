@@ -14,6 +14,9 @@ export const K_B = 1.380649e-23;
 /** 1 Torr expressed in Pa. */
 export const TORR_TO_PA = 133.322;
 
+/** Prescribed copper-outer-surface minus coolant temperature [K]; not a solved drop. */
+export const COPPER_COOLANT_OFFSET = 0.01;
+
 /**
  * Knudsen-number thresholds separating the three gas-transport regimes.
  * Kn < 0.01 continuum, Kn > 10 free molecular, otherwise transition.
@@ -32,21 +35,21 @@ export const KN_MOLECULAR_MIN = 10.0;
  * is unrepresentable rather than merely rejected.
  *
  * @typedef {object} ModelInputs
- * @property {number} r_cu           Copper cold-mass outer radius [m]
+ * @property {number} r_cu           Copper former outer radius [m]
  * @property {number} d_inner_gap    Copper to inner-wall gas gap thickness [m]
  * @property {number} t_inner_wall   Inner aluminium wall thickness [m]
  * @property {number} d_vacuum_gap   Main vacuum gap thickness [m]
  * @property {number} t_outer_wall   Outer aluminium wall thickness [m]
  * @property {number} length         Modelled axial length [m]
  * @property {number} T_amb          Ambient boundary temperature [K]
- * @property {number} T_cold         Cold boundary (copper) temperature [K]
+ * @property {number} T_cold         Prescribed copper outer-surface boundary [K]
  * @property {number} P_vacuum       Main vacuum gap pressure [Pa]
  * @property {number} P_inner_gap    Inner gas gap pressure, held fixed [Pa]
  * @property {number} n_mli          Number of MLI layers in the vacuum gap [-]
  * @property {number} k_outer_wall   Outer wall thermal conductivity [W/(m K)]
  * @property {number} k_inner_wall   Inner wall thermal conductivity [W/(m K)]
  * @property {number} eps_al         Emissivity of all radiating metal surfaces [-]
- * @property {number} k_air          Continuum air conductivity [W/(m K)]
+ * @property {number} k_air          Main-gap continuum air conductivity [W/(m K)]
  * @property {number} h_conv         External natural convection coefficient [W/(m^2 K)]
  * @property {number} C              Gas-model accommodation / bridging constant [-]
  * @property {number} d_air          Effective air molecule diameter [m]
@@ -68,7 +71,7 @@ export const DEFAULT_INPUTS = Object.freeze({
 
   // Boundary temperatures [K]
   T_amb: 300.0,
-  T_cold: 90.0,
+  T_cold: 77.01,
 
   // Vacuum [Pa]
   P_vacuum: 0.2,

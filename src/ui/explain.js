@@ -1,7 +1,7 @@
 /**
  * Guided walkthrough and the detail panel for a selected mechanism.
  *
- * The walkthrough follows a watt of heat from the room to the cold mass,
+ * The walkthrough follows a watt of heat from the room to the copper boundary,
  * annotating each step with the resistance it meets and the temperature drop
  * it costs at the current parameters.
  */
@@ -75,17 +75,19 @@ export function renderDetail(host, titleHost, store) {
   const info = explain(selected, result);
   titleHost.textContent = info.title;
 
-  // The vacuum gap holds two mechanisms; offer them as siblings so the
+  // The vacuum gap holds parallel mechanisms; offer them as siblings so the
   // parallel structure is navigable, not just describable.
   const related = {
     'vacuum-gap': [
       ['gas', 'Residual gas'],
       ['radiation', 'Radiation'],
+      ['mli-contact', 'MLI contact'],
       ['mli', 'MLI'],
     ],
-    gas: [['vacuum-gap', 'The gap as a whole'], ['radiation', 'Radiation'], ['mli', 'MLI']],
-    radiation: [['vacuum-gap', 'The gap as a whole'], ['gas', 'Residual gas'], ['mli', 'MLI']],
-    mli: [['radiation', 'Radiation'], ['gas', 'Residual gas'], ['vacuum-gap', 'The gap as a whole']],
+    gas: [['vacuum-gap', 'The gap as a whole'], ['radiation', 'Radiation'], ['mli-contact', 'MLI contact'], ['mli', 'MLI']],
+    radiation: [['vacuum-gap', 'The gap as a whole'], ['gas', 'Residual gas'], ['mli-contact', 'MLI contact'], ['mli', 'MLI']],
+    'mli-contact': [['vacuum-gap', 'The gap as a whole'], ['gas', 'Residual gas'], ['radiation', 'Radiation'], ['mli', 'MLI']],
+    mli: [['radiation', 'Radiation'], ['gas', 'Residual gas'], ['mli-contact', 'MLI contact'], ['vacuum-gap', 'The gap as a whole']],
   }[selected] ?? [];
 
   replace(

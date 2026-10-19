@@ -25,6 +25,7 @@ src/
 tests/                      Headless suite; runs under Node or JavaScriptCore
 reference/                  Independent synthetic oracle and generated test cases
 docs/                       This document, PHYSICS.md, VALIDATION.md
+  assets/                   Captured application screenshot
 scripts/check_release.py    Release checks: link integrity, Pages-safety, privacy scan
 ```
 
@@ -35,21 +36,28 @@ scripts/check_release.py    Release checks: link integrity, Pages-safety, privac
 test suite and under a plain JavaScript shell, and it is why the regression tests are
 possible at all.
 
-**One source of truth for geometry.** `resolveGeometry()` turns the input stack into
-radii. The solver and the cross-section drawing both consume the result, so the picture
-cannot drift away from the thing being solved. There is no second set of numbers for
-drawing.
+**One source of truth for modeled geometry.** `resolveGeometry()` turns the input
+stack into radii. The solver and cross-section both consume those radii. The coolant
+bore and blanket spacing are explicitly schematic: there is no specified bore radius,
+and the 0.2 mm/layer visualization/clearance heuristic is not used by the solver.
 
-**One source of truth for state.** The store holds the inputs; views are pure functions
-of it. No panel keeps its own copy of a parameter, so panels cannot disagree. A change
-goes `setInput → notify → render everything`, and there is no second update path.
+**Centralized state.** The store holds model inputs and interface state. Input
+changes use `setInput` or `setInputs`; interface selections use `setUi`.
+Subscribers are notified, and the views update from the store. Controls are
+retained in the DOM rather than reconstructed on each update.
+
+The historical input `T_cold` is the prescribed copper outer-surface temperature,
+not the LN₂ temperature. The coolant control maps its value through the fixed 0.01 K
+offset to `T_cold`; calculated outputs expose both boundary temperatures. Retaining
+`T_cold` lets synthetic and notebook-reference cases continue to supply their actual
+modeled cold boundary without adding a copper resistance or a coolant heat-load solve.
 
 **Derived data is computed in the model, not reconstructed in views.** `solve()` returns
 branch heat rates, temperature drops, fractions and gas state alongside the raw
 resistances, so no view re-implements a piece of physics to draw something. If the
 picture needs a number, the model provides it. The same applies to the regime boundaries
-the charts shade: `regimeBoundaryPressures()` lives in `src/model/gas.js`, so a band on a
-chart cannot disagree with the regime the solver reports.
+the charts shade: `regimeBoundaryPressures()` lives in `src/model/gas.js` and uses
+the same thresholds as the solver.
 
 **Presentation of the interface temperatures has one definition too.**
 `src/data/interfacePoints.js` holds the name, description and series colour for T1–T4 and
@@ -59,13 +67,14 @@ callouts all read it, so the same quantity is the same colour everywhere.
 ## Data flow
 
 ```
-user input ──► store.setInput ──► invalidate memo keys
+user input ──► store.setInput / setInputs ──► notify subscribers
                                         │
                                         ▼
+                         derived getters check their memo keys
                          derived.calc  (one solve)
                          derived.pressureSweep  (240 solves)
                          derived.mliSweep       (9 solves)
-                         derived.sensitivity    (24 solves)
+                         derived.sensitivity    (two solves per screened input)
                                         │
                         ┌───────────────┼────────────────┬──────────────┐
                         ▼               ▼                ▼              ▼
@@ -91,8 +100,9 @@ throttled History API degrades the shareable link rather than the application.
 
 ## Memoisation
 
-Each derived computation caches against a key built from the inputs it actually depends
-on, with the swept variable excluded:
+Each derived computation caches against a key built from the model inputs, with
+the swept variable excluded and sweep-specific settings added as needed. Keys
+are checked when a getter is read:
 
 | Derived | Key |
 | --- | --- |
@@ -101,26 +111,19 @@ on, with the swept variable excluded:
 | `mliSweep` | all inputs except `n_mli` and `P_vacuum`, plus the chosen sweep pressure |
 | `sensitivity` | all inputs |
 
-Dependencies are excluded by name rather than hashed wholesale, because that is the
-version that stays correct: a missed dependency shows up as a stale chart, which is
-exactly the failure an interactive model must not have.
+The current main-gap pressure is the MLI-sweep default; the user can instead select the
+synthetic reference pressure. A missed dependency can leave a chart stale, so
+the store tests exercise cache invalidation for individual inputs.
 
 ## Why no framework or build step
 
 The application is plain ES modules loaded directly by the browser. No bundler, no
 transpiler, no dependencies.
 
-The reasons:
-
-- **Deployment correctness.** Every path in `index.html` is relative, so the site works
-  identically at a domain root and under `/<repository-name>/` on GitHub Pages. The
-  usual base-path breakage has no way to occur.
-- **The source that ships is the source you read.** Anybody opening the repository or
-  the deployed page sees the same files, which matters more for something whose purpose
-  is to be inspected than a few kilobytes of bundling would.
-- **No dependency surface.** Nothing to audit, update or have break in two years.
-- **The tests run anywhere.** A suite with no framework dependency runs under Node, and
-  equally under a bare JavaScript shell.
+The browser loads the same source files that can be inspected in the repository.
+Relative asset paths also support serving the directory from a local HTTP server.
+The tests use no test-framework dependency and can be run with Node or a compatible
+JavaScriptCore shell. No hosting or deployment is configured by this candidate.
 
 The trade is real: no type checking, no tree shaking, no hot reload, and DOM
 construction is done by hand through small helpers rather than by a view library. For a
@@ -133,22 +136,27 @@ enforcement: no type checker runs in this project.
 
 ## Visualisation
 
-**Cross-section** (`src/viz/crossSection.js`). Annuli drawn from the resolved radii,
-scaled so the outermost drawn radius fits the canvas — proportions are true and a scale
-bar carries absolute size. Heat flow is drawn along the left-hand radius: series
-elements get one arrow, parallel pairs get two whose widths come from the solver's
-branch heat rates. Arrowheads use `markerUnits="userSpaceOnUse"` so they do not scale
-with stroke width. Each layer is a focusable, clickable hit region.
+**Cross-section** (`src/viz/crossSection.js`). Modeled radii come from the resolved
+geometry and carry a scale bar. The central coolant bore and separated MLI are schematic,
+not extra engineering inputs; the latter uses the illustrative drawing/clearance
+heuristic. Heat-flow indicators use the solver's branch heat rates. Each selected
+layer is a focusable, clickable hit region.
 
 **Thermal network** (`src/viz/network.js`). The resistance ladder as the solver
-assembles it, with the two parallel pairs drawn as genuine branches rather than as
-further links in the chain, each annotated with its resistance and the share of heat it
-carries.
+assembles it, with the ambient pair and vacuum triple drawn as branches and the inner
+gas gap as gas conduction only. It ends at the prescribed copper surface; the coolant
+temperature is shown separately without an invented copper resistance.
 
-**Plots** (`src/plots/`). Hand-rolled SVG. Written rather than imported because these
-plots need log axes with decade minor ticks, a series segmented by gas regime, and hover
-readout bound to model records rather than to bare coordinates. Pressure axes are drawn
-in Torr so that decade ticks land on round numbers in the unit displayed.
+**Plots** (`src/plots/`). SVG charts use log axes, regime-separated pressure
+series and hover readouts bound to model records. Non-converged or non-finite
+sweep points are excluded from the plotted lines and identified by a warning.
+Pressure axes are displayed in Torr. The pressure-sweep CSV retains diagnostic
+fields including convergence, finiteness and iteration count.
+
+**Inverse lookup** (`src/model/sweeps.js`). The analysis interface requests a
+target in W/m; the model searches each continuous pressure branch in log-pressure
+space and checks the returned heat rate. The target belongs to interface state,
+while geometry, pressures and material properties belong to model input state.
 
 ## Testing
 
@@ -165,3 +173,7 @@ and it is not something a physics test would catch.
 
 Synthetic oracle data is emitted as an ES module rather than JSON so the suite needs no
 file-system access and behaves identically in both runtimes.
+
+`tests/test_release_check.py` separately tests the release checker's narrow PNG
+screenshot policy using Python's standard library. The checker validates binary
+structure, not whether the screenshot's visible content is suitable for release.

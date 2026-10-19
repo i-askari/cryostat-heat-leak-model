@@ -1,304 +1,235 @@
-# Physics of the Version 1 model
+# Physics of the Version 2 model
 
-A steady-state, one-dimensional, radial thermal-resistance model of a cylindrical
-vacuum-insulated cryogenic enclosure. This document states every equation the model
-solves, every assumption behind it, and the places where the formulation is known to be
-approximate.
+This is a steady-state, one-dimensional cylindrical resistance network for
+illustration. Version 2 follows the supplied numerical model's equations; it is
+not an experimentally validated cryostat design. Public defaults and reference
+cases are synthetic. All heat rates and resistances are for the modelled length
+`L`; the headline value is `Q/L`.
 
-## Contents
+## Version 1 and Version 2
 
-- [The network](#the-network)
-- [Governing equations](#governing-equations)
-- [Numerical method](#numerical-method)
-- [Units](#units)
-- [Assumptions](#assumptions)
-- [Known approximations and rough edges](#known-approximations-and-rough-edges)
-- [Not modelled](#not-modelled)
-- [Future work](#future-work)
+| Aspect | Historical Version 1 | Version 2 |
+| --- | --- | --- |
+| Vacuum parallel paths | Gas and radiation | Gas, radiation and MLI contact |
+| MLI effect on gas | None | `N+1` in molecular and transition expressions |
+| Inner-gap continuum conductivity | Main-gap air conductivity | Temperature correlation at the selected inner-gap temperature |
+| Radiation, walls and network | Cylindrical resistance formulation | Same formulation |
 
-## The network
+Version 2 adds physically motivated mechanisms, but reproducing the stated
+correlations and solving their equations does not establish experimental accuracy.
+The previous public Version 1 release is retained as the initial Git commit.
 
-Heat enters from a warm ambient boundary and flows radially inward to a cold mass held
-at a fixed temperature.
+## Network and geometry
 
+From outside inward, the depicted assembly is ambient, outer aluminium wall,
+main vacuum gap containing MLI, inner aluminium wall, inner gas gap, copper former,
+and LN₂ coolant channel. Interfaces T1–T4 are, respectively, the outer and inner
+radii of the outer wall and the outer and inner radii of the inner wall. Ambient
+and the copper former's outer surface are the modeled network boundaries.
+The coolant channel is shown separately as a schematic region; its bore radius is
+not specified and no quantitative dimension is implied by the drawing.
+
+```text
+ambient ─ [convection || radiation] ─ T1 ─ outer wall ─ T2
+        ─ [gas || radiation + MLI || MLI contact] ─ T3 ─ inner wall ─ T4
+        ─ inner gas-gap gas conduction ─ copper former outer surface
+                                          (prescribed; coolant is separate)
 ```
-                    ┌── convection ──┐                  ┌── residual gas ────┐
-  T_amb ────────────┤                ├── T1 ─ outer ─ T2┤                    ├── T3 ─ inner ─ T4 ── inner ──── T_cold
-   (fixed)          └── radiation ───┘        wall      └── radiation + MLI ─┘        wall        gas gap      (fixed)
-```
 
-Four interface temperatures are solved for:
+`r_in_in = r_cu + d_inner_gap`, `r_in_ow = r_in_in + t_inner_wall`,
+`r_ow_in = r_in_ow + d_vacuum_gap`, and `r_ow_ow = r_ow_in + t_outer_wall`.
+For a cylindrical conductive shell, `R = ln(r_outer/r_inner)/(2 pi k L)`.
+Thus
 
-| Symbol | Location                    |
-| ------ | --------------------------- |
-| `T1`   | Outer wall, outer surface   |
-| `T2`   | Outer wall, inner surface   |
-| `T3`   | Inner wall, outer surface   |
-| `T4`   | Inner wall, inner surface   |
-
-`T_amb` and `T_cold` are boundary conditions, not solved.
-
-Five elements are in series. Two of them are internally parallel pairs:
-
-```
+```text
 R_total = R_ambient + R_cond_outer + R_vacuum + R_cond_inner + R_gap
-
-R_ambient = 1 / (G_conv + G_rad)                  parallel
-R_vacuum  = 1 / (1/R_gas + 1/R_radiation)         parallel
-
-Q = (T_amb - T_cold) / R_total
+R_vacuum = 1 / (1/R_gas + 1/R_rad + 1/R_solid_MLI)
+Q = (T_amb - T_copper_outer) / R_total
+q_per_length = Q / L
 ```
 
-The distinction matters for reading results. In a series element the same `Q` passes
-through; in a parallel pair, `Q` divides between the branches and their rates should
-sum to the flow through the pair. At finite solver tolerance these balances are only
-approximate; the application reports a warning when their relative error is large.
+All three vacuum branches span the same temperature difference `T2 - T3`.
+Each branch carries `(T2 - T3)/R_branch`, so the branch conductances add.
+Series elements carry the same heat rate; branch rates sum to the series rate
+only approximately at finite solver tolerance. The model uses SI units:
+radii and length in m, pressure in Pa, temperature in K, conductivity in
+W/(m K), resistance in K/W and heat rate in W. The displayed `Q/L` is in W/m.
+With all other inputs fixed, every resistance scales as `1/L`, so the network
+equations give `Q` proportional to `L` and `Q/L` independent of section length.
 
-## Governing equations
+## Copper former and coolant boundary
 
-### Geometry
+The public default prescribes `T_coolant = 77.00 K` and
+`T_copper_outer = T_coolant + 0.01 K = 77.01 K`. In the model API the existing
+`T_cold` input denotes `T_copper_outer`: it remains an adjustable numerical boundary
+and supports reference cases with other cold-side temperatures. The UI adjusts the
+coolant temperature and applies the fixed 0.01 K offset to this input.
 
-The radial build is defined by a cold-mass radius and a stack of positive thicknesses,
-from which the five radii follow:
+Copper conduction physically occurs, but no copper-wall resistance or temperature
+profile is solved. The nonzero copper-to-coolant temperature difference is prescribed,
+not predicted from material properties, geometry or heat rate. Its physical validity
+requires further investigation. The calculated heat rate enters the copper boundary;
+the model does not independently solve a coolant heat load. No resistance is added
+to the modeled series network for the schematic copper former.
 
-```
-r_in_in = r_cu     + d_inner_gap
-r_in_ow = r_in_in  + t_inner_wall
-r_ow_in = r_in_ow  + d_vacuum_gap
-r_ow_ow = r_ow_in  + t_outer_wall
-```
+## External convection and radiation
 
-This parameterisation cannot express a self-intersecting cryostat, so nested-radius
-violations are unrepresentable rather than merely rejected.
+Using `A_outer = 2 pi r_ow_ow L`,
 
-Implemented in [`src/model/geometry.js`](../src/model/geometry.js).
-
-### Cylindrical conduction
-
-Heat spreading through a cylindrical shell crosses an area that grows with radius, so
-resistance depends on the ratio of radii:
-
-```
-R = ln(r_outer / r_inner) / (2 pi k L)
-```
-
-Applied to both metal walls, with `k_outer_wall` and `k_inner_wall` respectively, and —
-with an effective gas conductivity in place of `k` — to both gas gaps.
-
-### External convection and radiation
-
-The room reaches the outer wall by two routes at once, so their conductances add:
-
-```
-G_conv = 2 pi r_ow_ow h L
-G_rad  = 2 pi r_ow_ow L sigma eps (T1^2 + T_amb^2)(T1 + T_amb)
-R_ambient = 1 / (G_conv + G_rad)
+```text
+G_conv = A_outer h
+G_rad_ambient = A_outer sigma eps (T1^2 + T_amb^2)(T1 + T_amb)
+R_ambient = 1/(G_conv + G_rad_ambient)
 ```
 
-The radiative conductance is a linearisation of `sigma eps (T1^4 - T_amb^4)`, factored as
-`(T1^2 + T_amb^2)(T1 + T_amb)(T1 - T_amb)`. The factorisation is algebraically exact; the
-approximation is that the conductance is held fixed within each solver iteration.
+The radiation factorization is algebraically exact; the conductance is evaluated
+at the current interface-temperature estimate in each iteration.
 
-### Residual gas conduction
+## Main-gap residual gas
 
-Whether the gas behaves as a continuum depends on how its mean free path compares with
-the gap:
+The mean free path is `lambda = mfp_coefficient / P` and the gap-scale Knudsen
+number is `Kn = lambda / d_vacuum_gap`. For `N` MLI layers:
 
-```
-lambda = mfp_coefficient / P            (main vacuum gap)
-Kn     = lambda / d
-```
+| Regime | Condition | Effective conductivity |
+| --- | --- | --- |
+| Continuum | `Kn < 0.01` | `k_air` |
+| Transition | `0.01 <= Kn <= 10` | `k_air/(1 + (N+1) C lambda/d)` |
+| Free molecular | `Kn > 10` | `k_air d/((N+1) C lambda)` |
 
-with a piecewise effective conductivity:
+The main-gap gas resistance is
 
-| Regime         | Condition    | Effective conductivity          |
-| -------------- | ------------ | ------------------------------- |
-| Continuum      | `Kn < 0.01`  | `k_eff = k_gas`                 |
-| Transition     | `0.01 – 10`  | `k_eff = k_gas / (1 + C λ/d)`   |
-| Free molecular | `Kn > 10`    | `k_eff = k_gas · d / (C λ)`     |
-
-and the resistance in cylindrical form:
-
-```
-R_gas = ln(r_ow_in / r_in_ow) / (2 pi k_eff L)
+```text
+R_gas = ln(r_ow_in/r_in_ow) / (2 pi k_eff L)
 ```
 
-The physical content: in the continuum regime, conductivity is independent of pressure,
-so pumping down from atmosphere buys nothing at first. In the free-molecular regime
-`λ ∝ 1/P`, so `k_eff ∝ P` and heat transfer falls in proportion to the number of
-molecules present. That is the regime where vacuum quality pays.
+Mean free path grows as pressure falls. The implemented conductivity is
+pressure-independent in the continuum branch and proportional to pressure in
+the free-molecular branch. The `N+1` factor suppresses gas conduction only in
+the transition and free-molecular branches; continuum conductivity remains
+`k_air` regardless of layer count. The exact
+boundaries belong to the transition regime as in the reference. These expressions
+have jumps at both boundaries; their size depends on `N` and `C`. The inverse
+lookup searches continuous branches separately over a finite pressure range,
+verifies the returned heat rate, and returns the lowest-pressure match it finds.
+Some targets cannot be attained because of jumps; a failed or non-converged
+evaluation also prevents a reliable search result.
 
-`C` is a dimensionless constant capturing accommodation and surface effects, usually
-quoted as order 1–3.
+This is not a resolved model of individual MLI subgaps. It applies `N+1` to
+transport while classifying the regime from the full vacuum-gap width, without
+independently calculating each subgap's geometry, pressure, temperature or Knudsen
+number. This may be a consequential approximation and has not been validated.
+The main-gap mean free path has no explicit temperature dependence.
+The parameter `C` is a dimensionless bridging coefficient in these expressions,
+not a directly measured gas-surface accommodation coefficient. The model
+does not solve buoyancy-driven convection in either gas gap.
 
-### Inner gas gap
+## Vacuum radiation and MLI contact
 
-The annulus between the cold mass and the inner wall bore is held at its own fixed
-pressure, independent of the main vacuum, and uses the kinetic-theory mean free path:
+```text
+S = T2^3 + T2^2 T3 + T2 T3^2 + T3^3
+R_rad = (N+1) [1/eps + (r_in_ow/r_ow_in)(1/eps - 1)]
+        / (2 pi r_in_ow L sigma S)
 
+R_solid_MLI = 2(N+1) / (Cs density^2.63 (T2+T3) A_inner)
+Cs = 8.95e-8, density = 20 layers/cm, A_inner = 2 pi r_in_ow L
 ```
-lambda = k_B T / (sqrt(2) pi d_molecule^2 P)
-Kn     = lambda / d_inner_gap
-R_gap  = ln(r_in_in / r_cu) / (2 pi k_eff L)
+
+The radiation factor treats all `N+1` gaps as equal-resistance shields. The
+contact equation is the notebook's empirical Lockheed-labelled correlation and
+uses the inner-wall outer cylindrical area. The notebook does not identify the
+coefficient's source, dimensional convention, materials or validity range. The
+coefficient is unit-sensitive: with density entered numerically in layers/cm,
+temperatures in K and flux in W/m², its implied dimensions are
+`W m^-2 K^-2 (layers/cm)^-2.63`; it must not be reused with layers/m unchanged.
+
+There is an important correlation mismatch to review. A [NASA technical paper's
+Lockheed-parameter table](https://ntrs.nasa.gov/api/citations/20110013505/downloads/20110013505.pdf)
+lists `Cs = 8.95e-8` with exponent `2.56` for its unperforated-shield case,
+and exponent `2.63` with `Cs = 7.30e-8` for its perforated-shield case. The
+notebook combines `8.95e-8` with `2.63`. The supplied equation is reproduced
+without substitution; that combination's provenance and applicability remain
+unverified. NASA's table does not validate this application or imply the notebook
+intended either specific material case.
+
+The notebook assigns a finite contact resistance even at `N=0`. This application
+deliberately treats an absent blanket as an open circuit: `R_solid_MLI = Infinity`
+and its heat rate is zero. This is the one explicit physical behavior difference;
+positive layer counts use the notebook equation unchanged.
+
+Typical MLI comprises reflective low-emissivity foils, such as aluminized polymer
+films, with low-conductivity spacers; these are examples, not a specification for an
+installed blanket. It primarily reduces radiation. This model also applies `N+1`
+to rarefied-gas transport and includes an empirical contact path, without resolving
+individual layers or their temperatures.
+
+The illustrated blanket lies within the main vacuum gap near, but separated from,
+the inner wall. Contacts within a blanket are distinct from its thermal coupling to
+the surrounding walls. The lumped contact branch nonetheless connects the two main
+gap nodes; the schematic clearance does not identify a continuous solid path to the
+walls. This is a physical limitation, not evidence of an invented mechanical contact.
+
+The fixed thermal correlation density is not computed from blanket thickness.
+The separately approved 0.2 mm/layer drawing and clearance heuristic is not a blanket
+specification and never enters gas, radiation, contact, resistance, or solver
+calculations.
+
+## Inner gas gap
+
+The unlayered inner gap lies between T4 and the prescribed copper outer surface.
+It has its own pressure and representative temperature, separate from the main
+vacuum gap:
+
+```text
+k_air_gap = 0.0241 (T_inner_gap / 273.15)^0.81
+lambda_gap = k_B T_inner_gap / (sqrt(2) pi d_molecule^2 P_inner_gap)
+Kn_gap = lambda_gap / d_inner_gap
+R_gap = ln(r_in_in/r_cu)/(2 pi k_eff_gap L)
 ```
 
-Conduction only: no radiation and no natural convection are modelled across this gap.
+The same gas regime conditions apply, with no MLI factor. The notebook fixes the
+representative temperature at 90 K; the public application retains its approved,
+independently selected 110 K default and permits it to be changed. Using 90 K
+reproduces the notebook's correlation. This is an input held fixed throughout a
+solve, not a temperature calculated dynamically from T4 and the copper surface.
+The independently specified inner-gap pressure remains fixed while the main
+vacuum pressure is swept. Thermal radiation across the inner gas gap
+is neglected in the current model. This is a simplifying assumption, not a claim
+that radiation cannot physically occur; natural convection there is also omitted.
 
-### Radiation across the vacuum gap, with MLI
+## Numerical method and convergence
 
-Between two concentric gray cylinders, linearised the same way as the external term:
+The fixed-point solver follows the reference method: initialize interface
+temperatures, evaluate the resistances (including temperature-dependent MLI
+contact), compute Q, update the four interface temperatures, and repeat. The
+application uses boundary-scaled initialization and configurable model inputs, with
+an illustrative default cap of 60 iterations and tolerance of 10^-6 K; the
+notebook uses fixed initial estimates, 50 iterations and 10^-4 K. In both,
+the convergence check precedes assignment of the next temperatures.
 
-```
-S           = T2^3 + T2^2 T3 + T2 T3^2 + T3^3
-numerator   = 1/eps + (r_in_ow / r_ow_in)(1/eps - 1)
-denominator = 2 pi r_in_ow L sigma S
-R_single    = numerator / denominator
-R_radiation = R_single (N_MLI + 1)
-```
+Convergence on absolute temperature motion does not guarantee a small relative
+branch-flow error. The UI warns when a parallel-flow balance exceeds 0.1% or
+the iteration does not converge. If the iteration limit is exhausted, returned
+temperatures may be one iterate ahead of the reported resistances and Q; treat
+those results as diagnostics. Sweep charts leave gaps and show a warning when
+individual solves fail to converge; sensitivity excludes failed perturbations.
+The synthetic heat-balance oracle uses a different
+numerical method; see [VALIDATION.md](VALIDATION.md).
 
-The multiplier `N + 1` idealizes the shields as equal-resistance radiation gaps.
-It is not an exact treatment of concentric shields with differing areas and
-temperatures or of real spacer and contact conduction.
+## Additional limitations
 
-The diminishing return on MLI follows from the network rather than from the radiation
-model: MLI raises the resistance of only one branch of a parallel pair. Once
-`R_radiation ≫ R_gas`, the combined `R_vacuum` is set by the gas and further layers
-change almost nothing.
-
-Implemented in [`src/model/resistances.js`](../src/model/resistances.js).
-
-## Numerical method
-
-Two resistances depend on the temperatures being solved for: `G_rad` depends on `T1`, and
-`R_radiation` depends on `T2` and `T3`. The system is therefore non-linear and is solved
-by fixed-point iteration:
-
-1. Initialize `T1` through `T4` at 5%, 10%, 70% and 85% of the temperature span
-   from ambient toward the cold boundary.
-2. Evaluate all resistances at the current temperatures.
-3. Compute `Q = (T_amb − T_cold) / R_total`.
-4. Walk the temperature drops inward: `T1 = T_amb − Q·R_ambient`, and so on.
-5. Stop when every interface temperature moves by less than `tolerance` (default
-   `1e-6` K), or after `max_iterations` (default 60).
-
-Two consequences worth stating plainly:
-
-- On convergence the check happens before temperature assignment, so the returned
-  temperatures are the iterate used to evaluate the temperature-dependent resistances.
-  Their differences from the updated temperature drops are bounded by the absolute
-  temperature tolerance when the solve converges; the heat-flow balances are not exact.
-  Relative balance errors can be more noticeable when the heat flow is very small.
-- When iteration does not converge, no such tolerance bound is guaranteed. The final
-  temperatures have advanced beyond the temperatures used for the stored resistances
-  and heat flow; those values may be internally inconsistent. Treat the last iterate
-  as a diagnostic rather than a reliable physical result.
-
-Non-convergence is reported, never hidden: `solve()` returns `converged` and
-`iterations`, and the interface raises a warning rather than presenting the last iterate
-as a converged answer. A separate warning is also shown when a converged result's
-parallel-branch total differs from the series heat rate by more than 0.1%. A tighter
-temperature tolerance can improve that balance, but may change the iteration count
-and numerical results.
-
-Implemented in [`src/model/solver.js`](../src/model/solver.js).
-
-## Units
-
-SI internally, everywhere: metres, kelvin, pascal, watts, and K/W for resistance.
-Conversion happens only at the interface boundary, where geometry is shown in mm and
-pressure in Torr or mTorr.
-
-**On `L` and W/m.** Every resistance carries a `1/L` factor, so `R_total ∝ 1/L` and `Q ∝ L`
-exactly. Heat leak per unit length is therefore independent of the modelled length, and
-quoting W/m is meaningful rather than a convention that only holds at `L = 1 m`. The
-application reports `Q/L` as the headline number in W/m and states the total watts over
-the modelled section beside it, so the two are never confused. A test asserts the exact
-proportionality.
-
-## Assumptions
-
-1. Steady state.
-2. One-dimensional radial heat flow; the same `Q` passes through every series element.
-3. Concentric, perfectly cylindrical geometry.
-4. Fixed ambient and cold-mass boundary temperatures.
-5. Constant material properties: no temperature dependence in conductivity, emissivity,
-   gas conductivity or convection coefficient.
-6. One emissivity for every radiating metal surface, including every MLI layer.
-7. Diffuse gray surfaces, view factor of one to the surroundings.
-8. MLI represented solely as increased radiative resistance.
-9. The inner gas gap is held at a fixed pressure and temperature.
-10. The cold mass is isothermal.
-
-## Known approximations and rough edges
-
-Stated explicitly because they bound how far the results should be trusted.
-
-**Hard regime switches.** The piecewise conductivity is discontinuous at its thresholds.
-At `Kn = 0.01` and `Kn = 10` the step size depends on `C`.
-A blending function would remove the step, at the cost of departing from the Version 1
-formulation. A target inside an upward jump has no exact pressure solution; a downward
-jump can yield more than one solution. The inverse lookup searches the continuous
-branches separately and reports the lowest-pressure match when one is found.
-
-**Two different mean free paths.** The main vacuum gap uses a fitted `λ = coefficient/P`
-with an independently selected illustrative coefficient and no temperature dependence;
-the inner gap uses the kinetic-theory expression. Both are exposed as parameters and
-are not guaranteed to represent mutually consistent gas conditions.
-
-**Slab Knudsen number in a cylindrical gap.** `Kn` uses the gap thickness as though the
-gap were planar, while the resistance uses the cylindrical form. For thin gaps the
-difference is small; for gaps comparable to the radius it is not.
-
-**Constant gas conductivity.** An illustrative `k_gas` is applied unchanged throughout
-the model. Real gas conductivity varies with temperature and gas composition.
-
-**`C` is a model constant.** It behaves like a temperature-jump coefficient in these
-expressions, not like a thermal accommodation coefficient, which would be at most 1. The
-interface warns outside 1–3 rather than silently accepting any value as physical.
-
-**Convection coefficient is a constant.** `h` does not respond to surface temperature,
-diameter, orientation or air movement. In practice it dominates the external conductance
-for some choices of parameters, so the external film resistance depends on the assumed
-inputs.
-
-**MLI layers have no thickness.** A layer count that could not physically fit inside the
-vacuum gap still computes. The interface warns when the implied blanket exceeds the gap,
-using an illustrative 0.2 mm per layer, but the thermal model does not act on it.
-Actual blanket thickness depends on construction and compression.
-
-## Not modelled
-
-- Axial conduction and end effects
-- Supports, spacers, ports, seals and penetrations
-- Joints and ohmic heating, and any axially localised heat source
-- Transient behaviour: cooldown, warm-up, thermal mass
-- Coolant fluid dynamics, flow, or the ability of the cooling system to hold temperature
-- MLI spacer conduction, contact conduction, edge and seam leakage, compression,
-  installation quality, or layer density
-- Radiation across the inner gas gap
-- Temperature gradients within the cold mass
-- Outgassing, gas species other than the single assumed gas, and pressure gradients
-  within a gap
-- Manufacturing tolerance, thermal contraction, and the effect of either on the gaps
-
-Any of these can matter more than the effects that are modelled. A real cryostat's heat
-leak is frequently dominated by supports and penetrations, which this model does not
-represent at all.
-
-## Future work
-
-Ordered roughly by the ratio of insight gained to effort:
-
-1. **Temperature-dependent properties.** `k(T)` for the walls and `k_gas(T)` for the gaps,
-   which would remove the largest property approximation.
-2. **A blended transition function** replacing the hard regime switches.
-3. **Support and penetration conduction** as parallel paths to the cold mass, which is
-   what would make the model useful for a real design rather than for exploring
-   mechanisms.
-4. **Consistent mean free path** across both gaps, with temperature dependence.
-5. **MLI with physical thickness**, spacer conduction and a degradation factor.
-6. **Axial discretisation**, which is the prerequisite for representing joints and any
-   localised heat source.
-7. **Transient solution** for cooldown behaviour.
-8. **Uncertainty propagation** rather than the one-at-a-time sensitivity screening
-   currently offered.
+The gas and radiation models use idealized surfaces and mostly fixed input
+properties. The inner-gap bulk gas correlation responds to its selected
+representative temperature; the radiation and contact resistances also depend
+on the iterated interface temperatures. The main-gap mean-free-path coefficient
+and gas conductivity do not vary automatically with temperature.
+The model does not resolve layer temperatures, contact distributions, thickness,
+compression, installation quality, edge or seam leakage, or detailed gas-surface
+interactions. It also omits supports, penetrations, axial/end effects, transients,
+coolant dynamics, inner-gap radiation and uncertainty propagation. Real hardware
+can be dominated by omitted paths. These limitations and the empirical coefficient
+require independent study and experimental validation before engineering use.
+The one-at-a-time sensitivity screening uses a minimum one-layer change for
+the discrete layer count and clamps its lower perturbation at zero. At zero
+layers the comparison is one-sided (zero versus one), so it captures the
+appearance of the contact branch rather than a symmetric ±20% perturbation.
+The screening is not an uncertainty analysis and does not quantify interactions.

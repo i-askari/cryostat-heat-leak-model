@@ -1,22 +1,20 @@
 /**
  * Residual-gas transport across a gap.
  *
- * Gas conduction between two surfaces depends on how often molecules collide
- * with each other compared with how often they cross the gap. The Knudsen
- * number Kn = lambda / d measures that ratio, and the effective conductivity
- * is modelled piecewise in Kn:
+ * Gas conduction depends on molecular collisions in the gap. The Knudsen
+ * number Kn = lambda / d compares mean free path with gap width. Effective
+ * conductivity is modelled piecewise in Kn:
  *
  *   continuum      Kn < 0.01   k_eff = k_air                  (pressure independent)
- *   transition     0.01-10     k_eff = k_air / (1 + C lambda/d)
- *   free molecular Kn > 10     k_eff = k_air d / (C lambda)   (proportional to pressure)
+ *   transition     0.01-10     k_eff = k_air / (1 + (N+1) C lambda/d)
+ *   free molecular Kn > 10     k_eff = k_air d / ((N+1) C lambda)
  *
  * The free-molecular branch is proportional to pressure because lambda is
  * inversely proportional to pressure: with fewer molecules there are fewer
  * carriers, and each crosses the gap without colliding.
  *
- * These are the Version 1 definitions, including the thresholds and the two
- * different mean-free-path expressions. See docs/PHYSICS.md for the known
- * discontinuities at the regime boundaries.
+ * Version 2 applies N+1 in the main gap. The inner gap has no MLI and uses
+ * N=0. See docs/PHYSICS.md for the discontinuities and model assumptions.
  */
 
 import { K_B, KN_CONTINUUM_MAX, KN_MOLECULAR_MIN } from './constants.js';
@@ -58,13 +56,19 @@ export function classifyRegime(Kn) {
  * @param {number} lambda Mean free path [m]
  * @param {number} d Gap thickness [m]
  * @param {number} C Accommodation / bridging constant [-]
+ * @param {number} [nMli=0] Main-gap layers; zero for the unlayered inner gap
  * @returns {number} Effective conductivity [W/(m K)]
  */
-export function effectiveGasConductivity(kAir, lambda, d, C) {
+export function effectiveGasConductivity(kAir, lambda, d, C, nMli = 0) {
   const Kn = lambda / d;
   if (Kn < KN_CONTINUUM_MAX) return kAir;
-  if (Kn > KN_MOLECULAR_MIN) return kAir * (d / (C * lambda));
-  return kAir / (1 + (C * lambda) / d);
+  if (Kn > KN_MOLECULAR_MIN) return kAir * (d / ((nMli + 1) * C * lambda));
+  return kAir / (1 + ((nMli + 1) * C * lambda) / d);
+}
+
+/** Notebook's temperature-dependent continuum conductivity for the inner gap. */
+export function innerGapConductivity(T) {
+  return 0.0241 * (T / 273.15) ** 0.81;
 }
 
 /**

@@ -8,7 +8,7 @@
  */
 
 import { SIGMA } from './constants.js';
-import { effectiveGasConductivity, meanFreePathFitted, meanFreePathKinetic } from './gas.js';
+import { effectiveGasConductivity, innerGapConductivity, meanFreePathFitted, meanFreePathKinetic } from './gas.js';
 
 /**
  * Conduction through a cylindrical shell: R = ln(r_o / r_i) / (2 pi k L).
@@ -80,6 +80,20 @@ export function radiationResistance(Thot, Tcold, nMli, inputs, geom) {
 }
 
 /**
+ * Notebook contact-conduction correlation: density is fixed at 20 layers/cm.
+ * The empirical coefficient's units and provenance are not specified in the
+ * notebook. This correlation does not use the clearance-screen thickness.
+ * The notebook gives finite conductance at zero layers; a physically absent
+ * blanket is deliberately represented here by an open circuit instead.
+ * @returns {number} Resistance [K/W], or Infinity for an absent blanket
+ */
+export function solidMliResistance(Thot, Tcold, nMli, geom) {
+  if (nMli === 0) return Infinity;
+  const area = 2 * Math.PI * geom.r_in_ow * geom.length;
+  return (2 * (nMli + 1)) / (8.95e-8 * 20 ** 2.63 * (Thot + Tcold) * area);
+}
+
+/**
  * Residual-gas conduction across the main vacuum gap.
  * @param {number} P Pressure [Pa]
  * @param {import('./constants.js').ModelInputs} inputs
@@ -89,7 +103,7 @@ export function radiationResistance(Thot, Tcold, nMli, inputs, geom) {
 export function vacuumGasResistance(P, inputs, geom) {
   const lambda = meanFreePathFitted(P, inputs.mfp_coefficient);
   const Kn = lambda / geom.d_vacuum_gap;
-  const k_eff = effectiveGasConductivity(inputs.k_air, lambda, geom.d_vacuum_gap, inputs.C);
+  const k_eff = effectiveGasConductivity(inputs.k_air, lambda, geom.d_vacuum_gap, inputs.C, inputs.n_mli);
   const R_gas = Math.log(geom.r_ow_in / geom.r_in_ow) / (2 * Math.PI * k_eff * geom.length);
   return { R_gas, Kn, k_eff, lambda };
 }
@@ -98,29 +112,29 @@ export function vacuumGasResistance(P, inputs, geom) {
  * Gas conduction across the inner copper-to-wall gap.
  *
  * Held at a fixed pressure and evaluated once per solve: unlike the main
- * vacuum, this volume is not swept. Version 1 models conduction only here,
+ * vacuum, this volume is not swept. The notebook models conduction only here,
  * with no radiation term.
  *
  * @param {import('./constants.js').ModelInputs} inputs
  * @param {import('./geometry.js').Geometry} geom
- * @returns {{R_gap: number, Kn_gap: number, k_eff_gap: number, lambda_gap: number}}
+ * @returns {{R_gap: number, Kn_gap: number, k_air_gap: number, k_eff_gap: number, lambda_gap: number}}
  */
 export function innerGapResistance(inputs, geom) {
   const lambda_gap = meanFreePathKinetic(inputs.T_inner_gap, inputs.P_inner_gap, inputs.d_air);
   const Kn_gap = lambda_gap / geom.d_inner_gap;
-  const k_eff_gap = effectiveGasConductivity(inputs.k_air, lambda_gap, geom.d_inner_gap, inputs.C);
+  const k_air_gap = innerGapConductivity(inputs.T_inner_gap);
+  const k_eff_gap = effectiveGasConductivity(k_air_gap, lambda_gap, geom.d_inner_gap, inputs.C);
   const R_gap = Math.log(geom.r_in_in / geom.r_cu) / (2 * Math.PI * k_eff_gap * geom.length);
-  return { R_gap, Kn_gap, k_eff_gap, lambda_gap };
+  return { R_gap, Kn_gap, k_air_gap, k_eff_gap, lambda_gap };
 }
 
 /**
- * Two resistances in parallel: 1/R = 1/R_a + 1/R_b.
- * @param {number} Ra [K/W]
- * @param {number} Rb [K/W]
+ * Resistances in parallel: reciprocals (conductances) add.
+ * @param {...number} resistances [K/W]
  * @returns {number} [K/W]
  */
-export function parallel(Ra, Rb) {
-  return 1 / (1 / Ra + 1 / Rb);
+export function parallel(...resistances) {
+  return 1 / resistances.reduce((sum, resistance) => sum + 1 / resistance, 0);
 }
 
 /**

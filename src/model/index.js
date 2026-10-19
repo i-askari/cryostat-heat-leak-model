@@ -7,6 +7,7 @@
  */
 
 export {
+  COPPER_COOLANT_OFFSET,
   DEFAULT_INPUTS,
   KN_CONTINUUM_MAX,
   KN_MOLECULAR_MIN,
@@ -22,6 +23,7 @@ export {
 export {
   classifyRegime,
   effectiveGasConductivity,
+  innerGapConductivity,
   meanFreePathFitted,
   meanFreePathKinetic,
   regimeBoundaryPressures,
@@ -37,6 +39,7 @@ export {
   parallel,
   radiationResistance,
   series,
+  solidMliResistance,
   vacuumGasResistance,
 } from './resistances.js';
 

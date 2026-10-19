@@ -3,12 +3,15 @@
  *
  * The network, from the warm side inward:
  *
- *   T_amb ─┬─ convection ─┬─ T1 ─ outer wall ─ T2 ─┬─ residual gas ──┬─ T3 ─ inner wall ─ T4 ─ inner gap ─ T_cold
- *          └─ radiation ──┘                        └─ radiation+MLI ─┘
+ *   T_amb ─┬─ convection ─┬─ T1 ─ outer wall ─ T2 ─┬─ residual gas ──┬─ T3 ─ inner wall ─ T4 ─ inner gas gap ─ T_cold
+ *          └─ radiation ──┘                        ├─ radiation+MLI ─┤
+ *                                                  └─ MLI contact ──┘
+ * T_cold is the prescribed copper outer-surface boundary. Coolant is a
+ * separately prescribed 0.01 K below it; copper resistance is not solved.
  *
- * Two of the resistances depend on the temperatures being solved for: the
- * external radiation conductance depends on T1, and the vacuum-gap radiation
- * resistance depends on T2 and T3. That makes the system non-linear, so it is
+ * Three resistances depend on the temperatures being solved for: the
+ * external radiation conductance depends on T1, and vacuum-gap radiation and
+ * MLI contact resistances depend on T2 and T3. The system is
  * solved by fixed-point iteration: evaluate the resistances at the current
  * temperature estimate, get Q from the series network, walk the temperature
  * drops back down from ambient, and repeat until the interface temperatures
@@ -23,6 +26,7 @@
  * a temperature drop or heat flow is very small.
  */
 
+import { COPPER_COOLANT_OFFSET } from './constants.js';
 import { classifyRegime } from './gas.js';
 import { resolveGeometry, validateInputs } from './geometry.js';
 import {
@@ -32,6 +36,7 @@ import {
   parallel,
   radiationResistance,
   series,
+  solidMliResistance,
   vacuumGasResistance,
 } from './resistances.js';
 
@@ -44,13 +49,16 @@ import {
  * @property {number} R_cond_ow    Outer wall conduction resistance [K/W]
  * @property {number} R_gas        Vacuum-gap residual gas resistance [K/W]
  * @property {number} R_rad        Vacuum-gap radiation resistance incl. MLI [K/W]
- * @property {number} R_vacuum     Parallel combination of R_gas and R_rad [K/W]
+ * @property {number} R_solid_MLI MLI contact resistance [K/W], Infinity at zero layers
+ * @property {number} R_vacuum     Parallel gas, radiation and solid resistance [K/W]
  * @property {number} R_cond_iw    Inner wall conduction resistance [K/W]
  * @property {number} R_gap        Inner gas gap resistance [K/W]
  * @property {number} T1 Outer surface of outer wall [K]
  * @property {number} T2 Inner surface of outer wall [K]
  * @property {number} T3 Outer surface of inner wall [K]
  * @property {number} T4 Inner surface of inner wall [K]
+ * @property {number} T_copper_outer Prescribed copper outer-surface boundary [K]
+ * @property {number} T_coolant Prescribed coolant temperature [K], not a solved node
  * @property {number} Kn Vacuum-gap Knudsen number [-]
  * @property {import('./constants.js').Regime} regime
  * @property {boolean} converged
@@ -76,7 +84,7 @@ export function solve(inputs) {
   const R_cond_iw = cylindricalConductionResistance(
     geom.r_in_ow, geom.r_in_in, inputs.k_inner_wall, geom.length,
   );
-  const { R_gap, Kn_gap, k_eff_gap, lambda_gap } = innerGapResistance(inputs, geom);
+  const { R_gap, Kn_gap, k_air_gap, k_eff_gap, lambda_gap } = innerGapResistance(inputs, geom);
   const { R_gas, Kn, k_eff, lambda } = vacuumGasResistance(inputs.P_vacuum, inputs, geom);
 
   // Illustrative initialization scaled to the selected boundary temperatures.
@@ -93,6 +101,7 @@ export function solve(inputs) {
   let G_rad_ambient = NaN;
   let R_ambient = NaN;
   let R_rad = NaN;
+  let R_solid_MLI = NaN;
   let R_vacuum = NaN;
   let R_total = NaN;
 
@@ -101,7 +110,8 @@ export function solve(inputs) {
 
     ({ G_conv, G_rad: G_rad_ambient, R_ambient } = ambientResistance(T1, inputs, geom));
     R_rad = radiationResistance(T2, T3, inputs.n_mli, inputs, geom);
-    R_vacuum = parallel(R_gas, R_rad);
+    R_solid_MLI = solidMliResistance(T2, T3, inputs.n_mli, geom);
+    R_vacuum = parallel(R_gas, R_rad, R_solid_MLI);
     R_total = series(R_ambient, R_cond_ow, R_vacuum, R_cond_iw, R_gap);
 
     // The same Q flows through every series element.
@@ -129,48 +139,67 @@ export function solve(inputs) {
     T4 = T4n;
   }
 
-  // Branch heat flows. Within a parallel pair the branches must sum to the
-  // series heat flow; tests/solver.test.js asserts that for both pairs.
+  // Ambient and vacuum branch sums should each match the series heat flow,
+  // within iteration tolerance; the vacuum network has three branches.
   const Q_conv = G_conv * (inputs.T_amb - T1);
   const Q_rad_ambient = G_rad_ambient * (inputs.T_amb - T1);
   const dT_vacuum = T2 - T3;
   const Q_gas = dT_vacuum / R_gas;
   const Q_rad_vacuum = dT_vacuum / R_rad;
+  const Q_solid_MLI = dT_vacuum / R_solid_MLI;
+  const Q_vacuum_branches = Q_gas + Q_rad_vacuum + Q_solid_MLI;
 
   const result = {
     // Primary result
     Q,
     Q_per_length: Q / geom.length,
+    driving_difference: temperatureSpan,
 
     // Resistances [K/W]
-    R_total, R_ambient, R_cond_ow, R_gas, R_rad, R_vacuum, R_cond_iw, R_gap,
+    R_total, R_ambient, R_conv: 1 / G_conv, R_rad_ambient: 1 / G_rad_ambient,
+    R_cond_ow, R_gas, R_rad, R_solid_MLI, R_vacuum, R_cond_iw, R_gap,
 
     // Interface temperatures [K]
     T1, T2, T3, T4,
+    T_copper_outer: inputs.T_cold,
+    T_coolant: inputs.T_cold - COPPER_COOLANT_OFFSET,
 
     // Temperature drops across each series element [K]
     dT_ambient: inputs.T_amb - T1,
     dT_outer_wall: T1 - T2,
     dT_vacuum,
+    vacuum_drop_fraction: dT_vacuum / temperatureSpan,
     dT_inner_wall: T3 - T4,
     dT_inner_gap: T4 - inputs.T_cold,
+    Q_inner_gap: (T4 - inputs.T_cold) / R_gap,
 
     // Gas state
     Kn, regime: classifyRegime(Kn), k_eff_gas: k_eff, lambda_gas: lambda,
-    Kn_gap, regime_gap: classifyRegime(Kn_gap), k_eff_gap, lambda_gap,
+    Kn_gap, regime_gap: classifyRegime(Kn_gap), k_air_gap, k_eff_gap, lambda_gap,
 
     // Parallel branch detail
     G_conv, G_rad_ambient,
     Q_conv, Q_rad_ambient,
-    Q_gas, Q_rad_vacuum,
-    gas_fraction: Q_gas / (Q_gas + Q_rad_vacuum),
-    radiation_fraction: Q_rad_vacuum / (Q_gas + Q_rad_vacuum),
+    Q_gas, Q_rad_vacuum, Q_solid_MLI,
+    gas_fraction: Q_gas / Q_vacuum_branches,
+    radiation_fraction: Q_rad_vacuum / Q_vacuum_branches,
+    fraction_solid_MLI: Q_solid_MLI / Q_vacuum_branches,
     conv_fraction: Q_conv / (Q_conv + Q_rad_ambient),
+    ambient_radiation_fraction: Q_rad_ambient / (Q_conv + Q_rad_ambient),
+    resistance_shares: {
+      R_ambient: R_ambient / R_total,
+      R_cond_ow: R_cond_ow / R_total,
+      R_vacuum: R_vacuum / R_total,
+      R_cond_iw: R_cond_iw / R_total,
+      R_gap: R_gap / R_total,
+    },
 
     // Pass-through context so consumers never have to rebuild it
     geometry: geom,
     inputs,
     P_vacuum: inputs.P_vacuum,
+    P_inner_gap: inputs.P_inner_gap,
+    T_inner_gap: inputs.T_inner_gap,
     n_mli: inputs.n_mli,
 
     // Solver diagnostics
@@ -179,8 +208,9 @@ export function solve(inputs) {
   };
   // Derived branch flows and resistances can overflow even when Q is finite.
   // Do not let a partially non-finite result through the validated entry point.
-  result.finite = Object.values(result).every((value) =>
-    typeof value !== 'number' || Number.isFinite(value));
+  result.finite = Object.entries(result).every(([key, value]) =>
+    typeof value !== 'number' || Number.isFinite(value) ||
+    (key === 'R_solid_MLI' && inputs.n_mli === 0 && value === Infinity));
   return result;
 }
 
@@ -227,7 +257,7 @@ export function calculateCryostat(inputs) {
     // relative heat-flow residual, especially across a low-resistance film.
     const balanceError = Math.max(
       Math.abs(result.Q_conv + result.Q_rad_ambient - result.Q),
-      Math.abs(result.Q_gas + result.Q_rad_vacuum - result.Q),
+      Math.abs(result.Q_gas + result.Q_rad_vacuum + result.Q_solid_MLI - result.Q),
     ) / Math.abs(result.Q);
     if (balanceError > 1e-3) {
       warnings.push({

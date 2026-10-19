@@ -30,8 +30,8 @@ const TABS = [
     label: 'MLI layers',
     question: 'Is there a point of diminishing returns on MLI?',
     blurb:
-      'Sweeps the layer count at a fixed pressure. How much layers help depends entirely '
-      + 'on how much of the heat radiation is carrying at that pressure.',
+      'Sweeps layer count at a fixed pressure. Layers affect radiation, rarefied gas '
+      + 'conduction and the empirical solid/contact path.',
     render: heatLeakVsMli,
   },
   {
@@ -48,7 +48,7 @@ const TABS = [
     label: 'Mechanisms',
     question: 'Which mechanism is limiting the design?',
     blurb:
-      'The split of heat between the two parallel branches of the vacuum gap, and the '
+      'The split of heat between the three parallel branches of the vacuum gap, and the '
       + 'branch resistances that produce it.',
     render: mechanismSplit,
   },
@@ -57,8 +57,9 @@ const TABS = [
     label: 'Sensitivity',
     question: 'Which parameter is the answer most sensitive to?',
     blurb:
-      'A one-at-a-time screening: each parameter scaled by plus and minus 20 percent, '
-      + 'everything else held fixed.',
+      'A one-at-a-time screening: each parameter scaled by approximately plus and minus '
+      + '20 percent, with MLI changed by at least one whole layer, clamped at zero, '
+      + 'and everything else held fixed.',
     render: sensitivityChart,
   },
 ];
@@ -109,6 +110,11 @@ export function renderAnalysis(tabHost, contentHost, store) {
     return;
   }
 
+  const isPressureSweep = ['pressure', 'temperatures', 'mechanisms'].includes(tab.id);
+  const warning = isPressureSweep
+    ? sweepWarning(store.derived.pressureSweep, 'Pressure')
+    : tab.id === 'mli' ? sweepWarning(store.derived.mliSweep.points, 'MLI') : null;
+
   replace(contentHost, el('div', {
     class: 'plot-layout',
     role: 'tabpanel',
@@ -118,6 +124,16 @@ export function renderAnalysis(tabHost, contentHost, store) {
     el('div', { class: 'plot-side' }, [
       el('h3', { text: tab.question }),
       el('p', { text: tab.blurb }),
+      warning ? el('p', { class: 'message warning', role: 'status', text: warning }) : null,
+      tab.id === 'sensitivity' && !store.derived.calc.result.converged
+        ? el('p', {
+          class: 'message warning', role: 'status',
+          text: 'Sensitivity is unavailable because the selected solution did not converge.',
+        }) : null,
+      tab.id === 'sensitivity' ? el('p', {
+        class: 'panel-note',
+        text: 'Invalid or non-converged perturbations are omitted from this screening.',
+      }) : null,
       tab.id === 'mli' ? mliPressureToggle(store) : null,
       tab.id === 'pressure' ? exportRow(store) : null,
       el('p', {
@@ -128,6 +144,15 @@ export function renderAnalysis(tabHost, contentHost, store) {
       }),
     ]),
   ]));
+}
+
+/** Summarize unusable sweep points without double-counting a point that fails both checks. */
+export function sweepWarning(points, label) {
+  const failed = points.filter(({ result }) => !result.converged || !result.finite).length;
+  if (!failed) return null;
+  return `${label} sweep: ${failed} of ${points.length} points did not converge or produced ` +
+    'non-finite results. Failed points are omitted from plots.' +
+    (label === 'Pressure' ? ' CSV retains them with diagnostic flags.' : '');
 }
 
 function mliPressureToggle(store) {

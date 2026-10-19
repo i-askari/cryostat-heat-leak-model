@@ -272,8 +272,9 @@ export function withHover(built, hover) {
     let bestDistance = Infinity;
 
     for (const record of hover.records) {
-      const distance = Math.abs(Math.log10(Math.max(hover.xOf(record), 1e-300))
-        - Math.log10(Math.max(value, 1e-300)));
+      // Compare positions in the actual plot scale. This works for linear
+      // axes (including zero MLI layers) as well as logarithmic pressure axes.
+      const distance = Math.abs(built.xScale(hover.xOf(record)) - built.xScale(value));
       if (distance < bestDistance) {
         bestDistance = distance;
         nearest = record;

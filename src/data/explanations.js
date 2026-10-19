@@ -101,32 +101,36 @@ export function explain(id, r) {
 
     case 'vacuum-gap':
       return {
-        title: 'Vacuum gap: residual gas and radiation',
+        title: 'Vacuum gap: three parallel paths',
         body: [
-          'The vacuum gap is where the insulation is won or lost. Two mechanisms cross it in '
-          + 'parallel: whatever gas is left conducts heat, and the two surfaces exchange '
-          + 'radiation. Their resistances combine reciprocally, so the smaller of the two '
-          + 'dominates the pair.',
-          'Which one dominates depends on pressure, and the model says that directly: at the '
+          'Three mechanisms cross the vacuum gap in parallel: residual gas conduction, '
+          + 'radiation between surfaces and empirical MLI solid/contact conduction. '
+          + 'Their conductances add because all three experience the same temperature drop.',
+          'Which one dominates depends on pressure, layer count, emissivity, interface '
+          + 'temperatures and gas transport regime. At the '
           + `current ${pressure(inputs.P_vacuum).combined} the gas carries `
           + `${percent(r.gas_fraction)} of the heat crossing the gap and radiation carries `
-          + `${percent(r.radiation_fraction)}.`,
+          + `${percent(r.radiation_fraction)}; MLI contact conduction carries `
+          + `${percent(r.fraction_solid_MLI)}.`,
         ],
         equation:
-          'R_vacuum = 1 / (1/R_gas + 1/R_radiation)\n'
-          + 'Q_gas + Q_radiation = (T2 - T3) / R_vacuum',
+          'R_vacuum = 1 / (1/R_gas + 1/R_radiation + 1/R_MLI)\n'
+          + 'Q_gas + Q_radiation + Q_MLI = (T2 - T3) / R_vacuum',
         numbers: [
           ['Gas resistance', `${sig(r.R_gas, 3)} K/W`],
           ['Radiation resistance', `${sig(r.R_rad, 3)} K/W`],
+          ['MLI contact resistance', Number.isFinite(r.R_solid_MLI) ? `${sig(r.R_solid_MLI, 3)} K/W` : 'Absent (no layers)'],
           ['Combined', `${sig(r.R_vacuum, 3)} K/W`],
           ['Heat via gas', `${sig(r.Q_gas, 3)} W`],
           ['Heat via radiation', `${sig(r.Q_rad_vacuum, 3)} W`],
+          ['Heat via MLI contact', `${sig(r.Q_solid_MLI, 3)} W`],
           ['Temperature drop', `${sig(r.dT_vacuum, 3)} K`],
         ],
         limitations:
-          'The two branches are treated as independent: the MLI raises radiative resistance '
-          + 'but is invisible to the gas, even though a real blanket obstructs gas transport '
-          + 'and conducts through its spacers and contact points.',
+          'The model treats the three branches as independent. It does not resolve the '
+          + 'individual gas gaps, thermal contacts or temperature of each layer. Internal '
+          + 'blanket contacts do not by themselves establish a continuous solid path to the '
+          + 'surrounding walls; that coupling is not resolved in this lumped network.',
       };
 
     case 'gas':
@@ -148,8 +152,8 @@ export function explain(id, r) {
         equation:
           'lambda = coefficient / P          Kn = lambda / d\n'
           + 'continuum      Kn < 0.01  k_eff = k_gas\n'
-          + 'transition     0.01 - 10  k_eff = k_gas / (1 + C lambda/d)\n'
-          + 'free molecular Kn > 10    k_eff = k_gas d / (C lambda)\n'
+          + 'transition     0.01 - 10  k_eff = k_gas / (1 + (N+1) C lambda/d)\n'
+          + 'free molecular Kn > 10    k_eff = k_gas d / ((N+1) C lambda)\n'
           + 'R_gas = ln(r_outer / r_inner) / (2 pi k_eff L)',
         numbers: [
           ['Pressure', pressure(inputs.P_vacuum).combined],
@@ -157,12 +161,15 @@ export function explain(id, r) {
           ['Gap width', `${millimetres(geom.d_vacuum_gap)} mm`],
           ['Knudsen number', sig(r.Kn, 3)],
           ['Regime', r.regime],
+          ['MLI layers', String(inputs.n_mli)],
           ['Effective conductivity', `${sig(r.k_eff_gas, 3)} W/(m K)`],
           ['Resistance', `${sig(r.R_gas, 3)} K/W`],
         ],
         limitations:
-          'The regime boundaries are hard switches, so the effective conductivity steps by a '
-          + 'few percent as it crosses them rather than blending smoothly. The mean free path '
+          'The regime boundaries are hard switches, so effective conductivity jumps rather '
+          + 'than blending smoothly. This treats N + 1 layers through a correction to the '
+          + 'whole-gap conductivity, not by resolving individual gap widths and Knudsen '
+          + 'numbers. The mean free path '
           + 'uses a fixed coefficient with no temperature dependence, and the gap is treated '
           + 'as a slab for the Knudsen number while the resistance uses cylindrical geometry. '
           + 'C is a model parameter, not a measured accommodation coefficient.',
@@ -205,86 +212,136 @@ export function explain(id, r) {
       return {
         title: 'Multi-layer insulation',
         body: [
-          'Each reflective layer is another surface that must absorb and re-radiate before '
-          + 'heat can continue inward. N layers create N + 1 radiation gaps in series, so the '
-          + 'model represents a blanket by multiplying the single-gap radiative resistance by '
-          + 'N + 1.',
-          'The return diminishes for a reason worth understanding: MLI only raises the '
-          + 'resistance of one branch of a parallel pair. Once the radiative resistance is '
-          + 'much larger than the gas resistance beside it, the combined resistance is set by '
-          + 'the gas and further layers change almost nothing. Adding layers is worthwhile '
-          + 'exactly to the extent that radiation is still carrying heat.',
-          `Radiation is currently carrying ${percent(r.radiation_fraction)} of the heat across `
-          + 'the gap, so that is roughly the fraction of the gap heat flow more layers could '
-          + 'act on.',
+          'MLI consists of low-emissivity reflective foils separated by low-conductivity '
+          + 'spacers. Metallized polymer films such as aluminized Mylar or Kapton are typical '
+          + 'examples, not a specification for this illustrative model. The layers primarily '
+          + 'reduce radiative exchange across the vacuum jacket.',
+          'The model approximates N reflective layers by multiplying a single-gap radiative '
+          + 'resistance by N + 1. Its gas model also uses N + 1 to represent suppression by '
+          + 'additional surfaces in rarefied regimes; it does not resolve individual foil gaps '
+          + 'or perform detailed molecular transport.',
+          'Contact between foils and spacers can conduct heat within real blankets. The '
+          + 'empirical contact branch is a lumped approximation across the wall nodes: '
+          + 'it does not resolve how an illustrated separated blanket couples to either wall.',
         ],
-        equation: 'R_radiation = R_single (N + 1)',
+        equation:
+          'S = T2³ + T2² T3 + T2 T3² + T3³\n'
+          + 'R_single = [1/eps + (r_in/r_out)(1/eps − 1)] / [2 pi r_in L sigma S]\n'
+          + 'R_radiation = R_single (N + 1)',
         numbers: [
           ['Layers', String(inputs.n_mli)],
           ['Radiative resistance', `${sig(r.R_rad, 3)} K/W`],
           ['Gas resistance beside it', `${sig(r.R_gas, 3)} K/W`],
-          ['Radiation share of gap heat', percent(r.radiation_fraction)],
+          ['Contact resistance', Number.isFinite(r.R_solid_MLI) ? `${sig(r.R_solid_MLI, 3)} K/W` : 'Absent (no layers)'],
+          ['Gas heat flow / fraction', `${sig(r.Q_gas, 3)} W / ${percent(r.gas_fraction)}`],
+          ['Radiation heat flow / fraction', `${sig(r.Q_rad_vacuum, 3)} W / ${percent(r.radiation_fraction)}`],
+          ['Contact heat flow / fraction', `${sig(r.Q_solid_MLI, 3)} W / ${percent(r.fraction_solid_MLI)}`],
         ],
         limitations:
-          'Layers have no thickness, mass or spacing in this model, so a blanket that could '
-          + 'not physically fit in the gap still computes. There is no spacer conduction, no '
-          + 'contact conduction between layers, no edge or seam leakage, and no allowance for '
-          + 'compression or installation quality, all of which make real blankets perform '
-          + 'worse than an ideal layer count suggests.',
+          'The solid/contact path is empirical, not a resolved blanket. Edge or seam leakage, '
+          + 'compression and installation quality are not modeled. The illustrative '
+          + '0.2 mm/layer clearance warning is not used in the thermal calculation and is '
+          + 'not the thermal-model layer-density assumption.',
+      };
+
+    case 'mli-contact':
+      return {
+        title: 'MLI solid and contact conduction',
+        body: [
+          'Version 2 includes a third path across the vacuum gap for conduction through '
+          + 'the blanket. The notebook uses an empirical Lockheed-style expression evaluated '
+          + 'at the current interface temperatures.',
+          'For zero layers the application treats the blanket path as absent: its resistance '
+          + 'is infinite and its heat flow is zero. This explicitly differs from evaluating '
+          + 'the notebook expression at zero layers.',
+        ],
+        equation:
+          'A = 2 pi r_inner_wall_outer L\n'
+          + 'R_MLI = 2 (N + 1) / [Cs n_layer^2.63 (T2 + T3) A]\n'
+          + 'Cs = 8.95 x 10^-8; n_layer = 20 layers/cm; N > 0\n'
+          + 'N = 0: R_MLI = infinity, Q_MLI = 0',
+        numbers: [
+          ['Layers', String(inputs.n_mli)],
+          ['Warm surface T2', `${temperature(r.T2)} K`],
+          ['Cold surface T3', `${temperature(r.T3)} K`],
+          ['Contact resistance', Number.isFinite(r.R_solid_MLI) ? `${sig(r.R_solid_MLI, 3)} K/W` : 'Absent (no layers)'],
+          ['Heat via contact', `${sig(r.Q_solid_MLI, 3)} W`],
+          ['Share of gap heat', percent(r.fraction_solid_MLI)],
+        ],
+        limitations:
+          'The notebook does not cite the empirical coefficient or state its units. A NASA '
+          + 'correlation table pairs this coefficient with a different density exponent; '
+          + 'the notebook combination is retained but its applicability is unverified. The fixed '
+          + '20 layers/cm correlation parameter is distinct from the illustrative '
+          + '0.2 mm-per-layer clearance warning. No experimental validation is claimed.',
       };
 
     case 'inner-gap':
       return {
         title: 'Inner gas gap',
         body: [
-          'Between the cold mass and the bore of the inner wall is a gas-filled annulus held '
-          + 'at its own fixed pressure, independent of the main vacuum. It uses the same '
-          + 'Knudsen treatment as the vacuum gap, with the mean free path from kinetic theory '
-          + 'at a representative gas temperature.',
+          'Between T4 at the inner-wall bore and the prescribed outer copper surface is a '
+          + 'gas-filled annulus with its own pressure, independent of the main vacuum. Its '
+          + 'mean free path uses kinetic theory at a representative gas temperature. As '
+          + 'pressure changes, the model transitions among continuum, transitional and '
+          + 'free-molecular transport using its Knudsen number.',
           'It matters more than its size suggests. Being in series with everything else, it '
-          + `currently accounts for ${percent(r.R_gap / r.R_total)} of the total resistance, `
-          + `and it holds the inner wall ${sig(r.dT_inner_gap, 3)} K above the cold mass.`,
+          + `currently accounts for ${percent(r.resistance_shares.R_gap)} of the total resistance, `
+          + `and the inner wall is ${sig(r.dT_inner_gap, 3)} K above the copper boundary.`,
         ],
         equation:
           'lambda = k_B T / (sqrt(2) pi d_molecule^2 P)\n'
-          + 'R_gap  = ln(r_bore / r_cold) / (2 pi k_eff L)',
+          + 'Kn = lambda / d_gap\n'
+          + 'k_air_gap = 0.0241 (T_gap / 273.15)^0.81\n'
+          + 'Kn < 0.01: k_eff = k_air_gap\n'
+          + '0.01 ≤ Kn ≤ 10: k_eff = k_air_gap / (1 + C Kn)\n'
+          + 'Kn > 10: k_eff = k_air_gap / (C Kn)\n'
+          + 'R_gap  = ln(r_inner-wall / r_copper-outer) / (2 pi k_eff L)',
         numbers: [
           ['Pressure', pressure(inputs.P_inner_gap).combined],
           ['Representative gas temperature', `${temperature(inputs.T_inner_gap)} K`],
+          ['Continuum gas conductivity', `${sig(r.k_air_gap, 3)} W/(m K)`],
+          ['Effective conductivity', `${sig(r.k_eff_gap, 3)} W/(m K)`],
           ['Mean free path', `${sig(r.lambda_gap, 3)} m`],
           ['Knudsen number', sig(r.Kn_gap, 3)],
           ['Regime', r.regime_gap],
           ['Resistance', `${sig(r.R_gap, 3)} K/W`],
-          ['Share of total resistance', percent(r.R_gap / r.R_total)],
+          ['Temperature drop', `${sig(r.dT_inner_gap, 3)} K`],
+          ['Heat flow', `${sig(r.Q_inner_gap, 3)} W`],
+          ['Copper outer surface', `${r.T_copper_outer.toFixed(2)} K (prescribed)`],
+          ['Share of total resistance', percent(r.resistance_shares.R_gap)],
         ],
         limitations:
-          'Conduction only: no radiation is modelled across this gap, and no natural '
-          + 'convection. The gas conductivity is the room-temperature value even though the '
-          + 'gas here is cold, and the representative temperature used for the mean free path '
-          + 'is an input rather than a solved quantity.',
+          'Thermal radiation across the inner gas gap is neglected in the current model; '
+          + 'this does not mean radiation is physically impossible. No natural '
+          + 'convection. The representative gas temperature is an input, not a solved '
+          + 'quantity; the correlation and gas composition are approximations.',
       };
 
     case 'cold-mass':
+    case 'copper-former':
+    case 'coolant':
       return {
-        title: 'Cold mass',
+        title: 'Copper former and LN₂ coolant',
         body: [
-          'The cold mass is a boundary condition, not a solved region: the whole of it is held '
-          + 'at the cold temperature. That is a reasonable simplification when it is a good '
-          + 'conductor cooled by a fluid, because the gradient within it is small compared '
-          + 'with the drops across the gaps.',
-          'It is the destination for every watt the model computes. The heat leak is what the '
-          + 'cooling system has to remove to hold this temperature.',
+          'The radial network ends at the outer surface of the copper former, which is '
+          + 'prescribed 0.01 K above the separately prescribed LN₂ coolant temperature. '
+          + 'The internal coolant bore is schematic: no bore radius is specified.',
+          'Copper does conduct heat physically, but this solver does not calculate a copper '
+          + 'resistance or resolve its temperature profile. The 0.01 K difference is an '
+          + 'imposed simplifying assumption, not a predicted temperature drop.',
         ],
         numbers: [
-          ['Temperature', `${temperature(inputs.T_cold)} K`],
-          ['Radius', `${millimetres(geom.r_cu)} mm`],
-          ['Heat arriving', `${sig(r.Q, 3)} W over ${sig(geom.length, 3)} m`],
+          ['Copper outer surface', `${r.T_copper_outer.toFixed(2)} K (prescribed)`],
+          ['LN₂ coolant', `${r.T_coolant.toFixed(2)} K (prescribed)`],
+          ['Copper outer radius', `${millimetres(geom.r_cu)} mm`],
+          ['Heat into copper boundary', `${sig(r.Q, 3)} W over ${sig(geom.length, 3)} m`],
           ['Per unit length', `${sig(r.Q_per_length, 3)} W/m`],
         ],
         limitations:
-          'No temperature gradient inside the cold mass, no axial conduction along it, and no '
-          + 'model of the coolant: the fluid is assumed able to hold this temperature whatever '
-          + 'the heat leak turns out to be.',
+          'The validity of the imposed 0.01 K copper-to-coolant difference requires further '
+          + 'investigation. Copper conduction, coolant heat transfer and fluid dynamics are '
+          + 'not resolved; the model does not separately calculate a coolant heat load.',
       };
 
     default:
@@ -311,7 +368,7 @@ export function explainSteps(r) {
       value: `${temperature(inputs.T_amb)} K`,
       detail:
         'The room is held at a fixed temperature. Everything downstream is driven by the '
-        + `${sig(inputs.T_amb - inputs.T_cold, 4)} K difference between it and the cold mass.`,
+        + `${sig(r.driving_difference, 4)} K difference between it and the copper outer surface.`,
     },
     {
       id: 'ambient',
@@ -320,17 +377,15 @@ export function explainSteps(r) {
       detail:
         `Two parallel routes carry all ${sig(r.Q, 3)} W to the wall: convection takes `
         + `${percent(r.conv_fraction)} of it. The outer surface settles at `
-        + `${temperature(r.T1)} K, only ${sig(r.dT_ambient, 3)} K below ambient, because this `
-        + 'resistance is small compared with what follows.',
+        + `${temperature(r.T1)} K, ${sig(r.dT_ambient, 3)} K below ambient.`,
     },
     {
       id: 'outer-wall',
       title: 'Through the outer wall',
       value: `${sig(r.R_cond_ow, 3)} K/W`,
       detail:
-        `Conduction through the metal costs only ${sig(r.dT_outer_wall, 3)} K. The whole heat `
-        + 'leak passes through here in series, but aluminium is too good a conductor for this '
-        + 'step to matter.',
+        `Conduction through the metal accounts for ${sig(r.dT_outer_wall, 3)} K of the `
+        + 'temperature drop. The whole heat leak passes through here in series.',
     },
     {
       id: 'gas',
@@ -346,17 +401,25 @@ export function explainSteps(r) {
       title: 'Radiation across the vacuum gap',
       value: `${sig(r.R_rad, 3)} K/W`,
       detail:
-        `In parallel with the gas, radiation between the ${temperature(r.T2)} K and `
+        `In parallel with gas and MLI contact conduction, radiation between the ${temperature(r.T2)} K and `
         + `${temperature(r.T3)} K surfaces carries ${sig(r.Q_rad_vacuum, 3)} W through `
         + `${inputs.n_mli} MLI layers.`,
+    },
+    {
+      id: 'mli-contact',
+      title: 'MLI solid and contact conduction',
+      value: Number.isFinite(r.R_solid_MLI) ? `${sig(r.R_solid_MLI, 3)} K/W` : 'Absent (no layers)',
+      detail:
+        `The empirical MLI contact path carries ${sig(r.Q_solid_MLI, 3)} W, or `
+        + `${percent(r.fraction_solid_MLI)} of the gap heat flow.`,
     },
     {
       id: 'vacuum-gap',
       title: 'The gap as a whole',
       value: `${sig(r.R_vacuum, 3)} K/W`,
       detail:
-        `The parallel pair gives up ${sig(r.dT_vacuum, 3)} K of the total temperature `
-        + `difference, which is ${percent(r.dT_vacuum / (inputs.T_amb - inputs.T_cold))} of `
+        `The parallel paths give up ${sig(r.dT_vacuum, 3)} K of the total temperature `
+        + `difference, which is ${percent(r.vacuum_drop_fraction)} of `
         + 'it. This is normally the dominant resistance in the network.',
     },
     {
@@ -364,7 +427,7 @@ export function explainSteps(r) {
       title: 'Through the inner wall',
       value: `${sig(r.R_cond_iw, 3)} K/W`,
       detail:
-        `Another small conduction step, worth ${sig(r.dT_inner_wall, 3)} K, bringing the bore `
+        `Another conduction step, worth ${sig(r.dT_inner_wall, 3)} K, bringing the bore `
         + `of the inner wall to ${temperature(r.T4)} K.`,
     },
     {
@@ -372,16 +435,16 @@ export function explainSteps(r) {
       title: 'Across the inner gas gap',
       value: `${sig(r.R_gap, 3)} K/W`,
       detail:
-        `The last step before the cold mass, held at ${pressure(inputs.P_inner_gap).combined}. `
-        + `It accounts for ${percent(r.R_gap / r.R_total)} of the total resistance and a `
+        `The last modeled step before the copper surface, at its own pressure of ${pressure(inputs.P_inner_gap).combined}. `
+        + `It accounts for ${percent(r.resistance_shares.R_gap)} of the total resistance and a `
         + `${sig(r.dT_inner_gap, 3)} K drop.`,
     },
     {
       id: 'cold-mass',
-      title: 'Cold boundary',
+      title: 'Prescribed copper boundary',
       value: `${sig(r.Q_per_length, 3)} W/m`,
       detail:
-        `All of it arrives here. Dividing the ${sig(inputs.T_amb - inputs.T_cold, 4)} K `
+        `Heat arrives at the copper outer surface (${r.T_copper_outer.toFixed(2)} K); LN₂ is separately prescribed at ${r.T_coolant.toFixed(2)} K. Dividing the ${sig(r.driving_difference, 4)} K `
         + `difference by the total resistance of ${sig(r.R_total, 4)} K/W gives `
         + `${sig(r.Q, 3)} W over the modelled ${sig(r.geometry.length, 3)} m, which is `
         + `${sig(r.Q_per_length, 3)} W/m.`,

@@ -7,7 +7,7 @@
  * a scale bar carries the absolute size.
  *
  * Heat flow is drawn along the left-hand radius. Series elements get one
- * arrow; the two parallel pairs get two arrows whose widths are set by the
+ * arrow; parallel branches get arrows whose widths are set by the
  * branch heat rates the solver returns, so the picture of which mechanism
  * dominates is the calculated one.
  */
@@ -15,10 +15,10 @@
 import { INTERFACE_POINTS } from '../data/interfacePoints.js';
 import { resolveGeometry } from '../model/geometry.js';
 import { svg } from '../utils/dom.js';
-import { millimetres, percent, sig, temperature } from '../utils/format.js';
+import { millimetres, sig, temperature } from '../utils/format.js';
 
 const W = 680;
-const H = 430;
+const H = 490;
 const CX = 190;
 const CY = 206;
 const MAX_R = 160;
@@ -31,7 +31,7 @@ const MAX_R = 160;
 const AMBIENT_FACTOR = 1.2;
 
 const LABEL_X = 392;
-const LABEL_ROW_Y = [46, 88, 130, 172, 214, 256];
+const LABEL_ROW_Y = [35, 80, 125, 170, 215, 260, 305];
 
 /**
  * @param {import('../model/solver.js').ModelResult & Record<string, any>} result
@@ -49,11 +49,15 @@ export function renderCrossSection(result, options) {
   const root = svg('svg', {
     class: 'cross-section',
     viewBox: `0 0 ${W} ${H}`,
-    role: 'img',
+    // Unlike role=img, group keeps the interactive regions accessible.
+    role: 'group',
     'aria-label':
-      `Radial cross-section. Cold mass radius ${millimetres(geom.r_cu)} millimetres at `
-      + `${temperature(inputs.T_cold)} kelvin, ambient at ${temperature(inputs.T_amb)} kelvin. `
-      + `Heat leak ${sig(result.Q_per_length, 3)} watts per metre.`,
+      `Radial cross-section. Copper former outer radius ${millimetres(geom.r_cu)} millimetres at `
+      + `${result.T_copper_outer.toFixed(2)} kelvin. Schematic LN₂ channel at ${result.T_coolant.toFixed(2)} kelvin, `
+      + `ambient at ${temperature(inputs.T_amb)} kelvin. `
+      + `Heat leak ${sig(result.Q_per_length, 3)} watts per metre. Vacuum gap heat paths: `
+      + `gas ${sig(result.Q_gas, 3)} W, radiation ${sig(result.Q_rad_vacuum, 3)} W, `
+      + `MLI contact ${sig(result.Q_solid_MLI, 3)} W.`,
   });
 
   root.appendChild(defs());
@@ -94,18 +98,25 @@ export function renderCrossSection(result, options) {
     }));
   }
 
-  // Cold mass.
-  layerGroup.appendChild(svg('circle', {
-    cx: CX, cy: CY, r: px(geom.r_cu),
+  // The source specifies the former outer radius, but not the coolant bore.
+  // This inner radius is a schematic drawing proportion, never a model input.
+  const borePx = px(geom.r_cu) * 0.5;
+  layerGroup.appendChild(svg('path', {
+    'data-region': 'copper-former',
+    d: annulus(CX, CY, px(geom.r_cu), borePx), 'fill-rule': 'evenodd',
     fill: 'var(--copper)', stroke: 'var(--copper)', 'stroke-width': 1, opacity: 0.85,
+  }));
+  layerGroup.appendChild(svg('circle', {
+    'data-region': 'coolant-channel', cx: CX, cy: CY, r: borePx,
+    fill: '#9ad9e7', stroke: 'var(--cold)', 'stroke-width': 1,
   }));
 
   root.appendChild(layerGroup);
 
-  // MLI, drawn as a band of reflective layers wrapped on the inner wall.
-  if (inputs.n_mli > 0) {
-    root.appendChild(mliBand(px(geom.r_in_ow), px(geom.r_ow_in), inputs.n_mli));
-  }
+  // A clear radial separation is left from both walls. The 0.2 mm/layer
+  // assumption is only for this illustration and the separate fit warning.
+  const band = mliGeometry(geom, inputs.n_mli);
+  if (band) root.appendChild(mliBand(px(band.inner), px(band.outer), inputs.n_mli));
 
   // --- heat flow -------------------------------------------------------
   root.appendChild(heatFlow(result, geom, px));
@@ -142,29 +153,38 @@ export function renderCrossSection(result, options) {
     }));
   }
 
-  // The cold mass is selectable too.
-  const coldSelected = options.selectedLayer === 'cold-mass';
-  hits.appendChild(svg('circle', {
-    class: 'layer-hit', cx: CX, cy: CY, r: px(geom.r_cu), fill: 'transparent',
-    tabindex: '0', role: 'button', 'aria-label': 'Cold mass details',
-    'aria-pressed': coldSelected ? 'true' : 'false',
-    onclick: () => options.onSelect('cold-mass'),
-    onkeydown: (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        options.onSelect('cold-mass');
-      }
-    },
-  }));
-  hits.appendChild(svg('circle', {
-    class: `layer-outline${coldSelected ? ' selected' : ''}`,
-    cx: CX, cy: CY, r: px(geom.r_cu),
-  }));
+  const addHit = (id, label, path) => {
+    const selected = options.selectedLayer === id;
+    hits.appendChild(svg('path', {
+      class: 'layer-hit', d: path, 'fill-rule': 'evenodd', fill: 'transparent',
+      tabindex: '0', role: 'button', 'aria-label': `${label} details`,
+      'aria-pressed': selected ? 'true' : 'false', onclick: () => options.onSelect(id),
+      onkeydown: (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          options.onSelect(id);
+        }
+      },
+    }));
+    hits.appendChild(svg('path', {
+      class: `layer-outline${selected ? ' selected' : ''}`, d: path, 'fill-rule': 'evenodd',
+    }));
+  };
+  addHit('copper-former', 'Copper former', annulus(CX, CY, px(geom.r_cu), borePx));
+  addHit('coolant', 'LN₂ coolant channel', circlePath(CX, CY, borePx));
+  // Add the blanket hit last so it wins over the enclosing vacuum hit area.
+  if (band) {
+    // Enlarge the selectable region for thin blankets, without changing the
+    // illustration or allowing the hit target to leave the vacuum gap.
+    const hitOuter = Math.min(px(geom.r_ow_in), px(band.outer) + 3);
+    const hitInner = Math.max(px(geom.r_in_ow), px(band.inner) - 3);
+    addHit('mli', 'MLI blanket', annulus(CX, CY, hitOuter, hitInner));
+  }
 
   root.appendChild(hits);
 
   // --- callouts --------------------------------------------------------
-  root.appendChild(callouts(result, geom, px));
+  root.appendChild(callouts(result, geom, px, borePx, band));
   root.appendChild(scaleBar(scale));
 
   return root;
@@ -208,6 +228,7 @@ function defs() {
     ['arrow-rad', 'var(--radiation)'],
     ['arrow-conv', 'var(--convection)'],
     ['arrow-solid', 'var(--warm)'],
+    ['arrow-mli-contact', 'var(--mli-contact)'],
   ]) {
     d.appendChild(svg('marker', {
       id, viewBox: '0 0 10 10', refX: 7.5, refY: 5,
@@ -221,20 +242,28 @@ function defs() {
   return d;
 }
 
-/**
- * MLI band: one drawn line per layer up to a readable maximum, then a
- * representative subset. The label always states the real count.
- */
-function mliBand(rInnerWallPx, rVacuumOuterPx, nLayers) {
-  const g = svg('g', { 'aria-hidden': 'true' });
-  const available = Math.max(rVacuumOuterPx - rInnerWallPx - 4, 4);
-  // Keep the blanket visibly thinner than the gap it sits in, and keep the
-  // lines far enough apart to read as separate layers.
-  const drawn = Math.min(nLayers, 10);
-  const bandWidth = Math.min(available * 0.35, 2.2 * drawn);
+/** Display-only radial position; it does not enter any thermal resistance. */
+function mliGeometry(geom, nLayers) {
+  if (nLayers <= 0) return null;
+  const gap = geom.d_vacuum_gap;
+  const innerClearance = Math.min(0.001, gap * 0.12);
+  const outerClearance = Math.min(0.00025, gap * 0.04);
+  const illustrativeWidth = nLayers * 0.0002;
+  const available = Math.max(gap - innerClearance - outerClearance, 0);
+  const shownWidth = Math.min(illustrativeWidth, available);
+  return {
+    inner: geom.r_in_ow + innerClearance,
+    outer: geom.r_in_ow + innerClearance + shownWidth,
+    compressed: illustrativeWidth > available,
+  };
+}
 
+/** Reflective circles are a representative subset at high layer counts. */
+function mliBand(rInnerPx, rOuterPx, nLayers) {
+  const g = svg('g', { 'aria-hidden': 'true', 'data-region': 'mli-layers' });
+  const drawn = Math.min(nLayers, 10);
   for (let i = 0; i < drawn; i++) {
-    const r = rInnerWallPx + 2.5 + (bandWidth * (i + 0.5)) / drawn;
+    const r = rInnerPx + ((rOuterPx - rInnerPx) * (i + 0.5)) / drawn;
     g.appendChild(svg('circle', {
       cx: CX, cy: CY, r,
       fill: 'none', stroke: 'var(--mli)',
@@ -249,15 +278,12 @@ function mliBand(rInnerWallPx, rVacuumOuterPx, nLayers) {
 /**
  * Heat-flow arrows along the left radius.
  *
- * Widths encode the calculated branch heat rates: in each parallel pair the
- * two arrows are sized by their share of the flow through that pair, so the
+ * Widths encode the calculated branch heat rates: parallel arrows are sized
+ * by their share of the flow through that section, so the
  * drawing changes when the dominant mechanism changes.
  */
 function heatFlow(result, geom, px) {
   const g = svg('g', { 'aria-hidden': 'true', class: 'heat-flow' });
-
-  const x = (r) => CX - px(r);
-  const total = Math.max(result.Q, 1e-30);
 
   /**
    * Arrow width from a branch's share of the flow. Square-rooted so a branch
@@ -271,9 +297,12 @@ function heatFlow(result, geom, px) {
    * @param {number} rTo inner radius [m]
    */
   const segment = (rFrom, rTo, y, color, share, marker, animate = true) => {
-    const x1 = x(rFrom);
-    const x2 = x(rTo);
-    if (x2 - x1 < 3) return; // too thin to draw honestly
+    const dy = Math.abs(y - CY);
+    if (dy >= px(rTo)) return;
+    // Intersections are with the actual circles, not their horizontal radii.
+    const x1 = CX - Math.sqrt(px(rFrom) ** 2 - dy ** 2);
+    const x2 = CX - Math.sqrt(px(rTo) ** 2 - dy ** 2);
+    if (x2 - x1 < 12) return; // no room for the arrowhead inside this layer
     const fraction = Math.min(Math.max(share, 0), 1);
     const opacity = 0.25 + 0.75 * Math.min(1, Math.sqrt(fraction) * 1.4);
 
@@ -297,43 +326,35 @@ function heatFlow(result, geom, px) {
   // Ambient: convection and radiation in parallel, drawn as two arrows.
   const ambientOuter = geom.r_ow_ow * AMBIENT_FACTOR;
   segment(ambientOuter, geom.r_ow_ow, CY - 13, 'var(--convection)',
-    result.Q_conv / total, 'arrow-conv');
+    result.conv_fraction, 'arrow-conv');
   segment(ambientOuter, geom.r_ow_ow, CY + 13, 'var(--radiation)',
-    result.Q_rad_ambient / total, 'arrow-rad');
+    result.ambient_radiation_fraction, 'arrow-rad');
 
   // Outer wall: a single series path carrying all of Q.
   segment(geom.r_ow_ow, geom.r_ow_in, CY, 'var(--warm)', 1, 'arrow-solid', false);
 
-  // Vacuum gap: residual gas and radiation in parallel.
-  segment(geom.r_ow_in, geom.r_in_ow, CY - 13, 'var(--gas)',
-    result.Q_gas / total, 'arrow-gas');
-  segment(geom.r_ow_in, geom.r_in_ow, CY + 13, 'var(--radiation)',
-    result.Q_rad_vacuum / total, 'arrow-rad');
+  // Vacuum gap: three parallel channels. No MLI means no contact path.
+  const branchOffset = Math.min(14, px(geom.r_in_ow) * 0.24);
+  segment(geom.r_ow_in, geom.r_in_ow, CY - branchOffset, 'var(--gas)',
+    result.gas_fraction, 'arrow-gas');
+  segment(geom.r_ow_in, geom.r_in_ow, CY, 'var(--radiation)',
+    result.radiation_fraction, 'arrow-rad');
+  if (result.inputs.n_mli > 0) {
+    segment(geom.r_ow_in, geom.r_in_ow, CY + branchOffset, 'var(--mli-contact)',
+      result.fraction_solid_MLI, 'arrow-mli-contact');
+  }
 
   // Inner wall and inner gap: series again. Every series element carries the
   // whole of Q, so they share one colour and one legend entry rather than
   // implying a distinction the network does not make.
   segment(geom.r_in_ow, geom.r_in_in, CY, 'var(--warm)', 1, 'arrow-solid', false);
-  segment(geom.r_in_in, geom.r_cu, CY, 'var(--warm)', 1, 'arrow-solid');
-
-  // Branch share labels, only where there is room and a story to tell.
-  const vacuumMidX = (x(geom.r_ow_in) + x(geom.r_in_ow)) / 2;
-  if (x(geom.r_in_ow) - x(geom.r_ow_in) > 54) {
-    g.appendChild(svg('text', {
-      class: 'dim-text', x: vacuumMidX, y: CY - 20, 'text-anchor': 'middle',
-      fill: 'var(--gas)', text: `gas ${percent(result.gas_fraction)} of gap Q`,
-    }));
-    g.appendChild(svg('text', {
-      class: 'dim-text', x: vacuumMidX, y: CY + 30, 'text-anchor': 'middle',
-      fill: 'var(--radiation)', text: `rad ${percent(result.radiation_fraction)} of gap Q`,
-    }));
-  }
+  segment(geom.r_in_in, geom.r_cu, CY, 'var(--gas)', 1, 'arrow-gas');
 
   return g;
 }
 
 /** Leader lines from each interface to a label column on the right. */
-function callouts(result, geom, px) {
+function callouts(result, geom, px, borePx, band) {
   const g = svg('g', {});
   const inputs = result.inputs;
 
@@ -341,12 +362,12 @@ function callouts(result, geom, px) {
   // declares them. Colours and wording come from that shared list so the
   // drawing, the results table and the temperature plot always agree.
   const geometryForPoint = {
-    T_amb: { angle: 96, r: geom.r_ow_ow * AMBIENT_FACTOR, detail: 'fixed boundary' },
-    T1: { angle: 74, r: geom.r_ow_ow },
-    T2: { angle: 56, r: geom.r_ow_in },
-    T3: { angle: 36, r: geom.r_in_ow },
-    T4: { angle: 20, r: geom.r_in_in },
-    T_cold: { angle: 6, r: geom.r_cu },
+    T_amb: { angle: 72, r: geom.r_ow_ow * AMBIENT_FACTOR, detail: 'fixed boundary' },
+    T1: { angle: 55, r: geom.r_ow_ow },
+    T2: { angle: 35, r: geom.r_ow_in },
+    T3: { angle: 0, r: geom.r_in_ow },
+    T4: { angle: -5, r: geom.r_in_in },
+    T_cold: { angle: -20, r: geom.r_cu, detail: `outer surface · r = ${millimetres(geom.r_cu)} mm` },
   };
 
   const rows = INTERFACE_POINTS.map((point) => {
@@ -354,11 +375,20 @@ function callouts(result, geom, px) {
     return {
       angle: place.angle,
       r: place.r,
-      title: point.solved ? `${point.symbol} ${point.name.toLowerCase()}` : point.name,
+      title: point.solved ? `${point.symbol} — ${point.name}` : point.key === 'T_cold' ? 'Copper Former' : point.name,
       detail: place.detail ?? `r = ${millimetres(place.r)} mm`,
       temp: point.solved ? result[point.key] : inputs[point.key],
+      prescribedCold: point.key === 'T_cold',
       color: point.color,
     };
+  });
+
+  // The channel is a physical region, not an extra solved interface. Its
+  // size is schematic and deliberately has no displayed radius.
+  rows.push({
+    angle: -70, r: borePx / px(1) * 0.65,
+    title: 'LN₂ Coolant Channel', detail: 'schematic bore · prescribed coolant',
+    temp: result.T_coolant, color: 'var(--cold)', prescribedCold: true,
   });
 
   rows.forEach((row, i) => {
@@ -386,41 +416,23 @@ function callouts(result, geom, px) {
     }));
     g.appendChild(svg('text', {
       class: 'temp-label', x: W - 12, y: rowY + 4, 'text-anchor': 'end',
-      fill: row.color, text: `${temperature(row.temp)} K`,
+      fill: row.color, text: `${row.prescribedCold ? row.temp.toFixed(2) : temperature(row.temp)} K`,
     }));
   });
 
-  // Gap annotations, placed in the lower-left quadrant where the flow arrows
-  // are not.
-  const gapLabels = [
-    { rOuter: geom.r_ow_in, rInner: geom.r_in_ow, text: `vacuum gap ${millimetres(geom.d_vacuum_gap)} mm` },
-    { rOuter: geom.r_in_in, rInner: geom.r_cu, text: `inner gap ${millimetres(geom.d_inner_gap)} mm` },
+  const notes = [
+    `Main vacuum gap: ${millimetres(geom.d_vacuum_gap)} mm`,
+    `Inner gas gap: ${millimetres(geom.d_inner_gap)} mm`,
+    `MLI: ${result.inputs.n_mli} layers within the vacuum gap`,
+    !band ? 'No MLI blanket is drawn at zero layers.'
+      : band.compressed ? 'MLI drawing compressed to fit the gap.'
+        : 'MLI shown with illustrative clearance.',
+    '0.2 mm/layer: drawing and warning only.',
+    'Click regions for live physics details.',
   ];
-
-  gapLabels.forEach((gap, i) => {
-    const rMid = px((gap.rOuter + gap.rInner) / 2);
-    const angle = (i === 0 ? 242 : 292) * (Math.PI / 180);
-    const tx = CX + rMid * Math.cos(angle);
-    const ty = CY - rMid * Math.sin(angle);
-    const labelY = H - 44 + i * 15;
-
-    g.appendChild(svg('polyline', {
-      class: 'dim-line',
-      points: `${tx.toFixed(1)},${ty.toFixed(1)} ${tx.toFixed(1)},${labelY - 8} ${LABEL_X - 120},${labelY - 8}`,
-      fill: 'none',
-    }));
-    g.appendChild(svg('text', {
-      class: 'dim-text', x: LABEL_X - 116, y: labelY - 5, text: gap.text,
-    }));
-  });
-
-  if (result.inputs.n_mli > 0) {
-    g.appendChild(svg('text', {
-      class: 'dim-text', x: LABEL_X, y: H - 26,
-      fill: 'var(--mli)',
-      text: `MLI: ${result.inputs.n_mli} layers on the inner wall`,
-    }));
-  }
+  notes.forEach((text, i) => g.appendChild(svg('text', {
+    class: 'dim-text', x: LABEL_X, y: 344 + i * 16, text,
+  })));
 
   return g;
 }
@@ -457,7 +469,9 @@ export function crossSectionLegend() {
     { label: 'Convection branch', color: 'var(--convection)', shape: 'line' },
     { label: 'Radiation branch', color: 'var(--radiation)', shape: 'line' },
     { label: 'Residual gas branch', color: 'var(--gas)', shape: 'line' },
+    { label: 'MLI solid/contact branch', color: 'var(--mli-contact)', shape: 'line' },
     { label: 'MLI layers', color: 'var(--mli)', shape: 'dot' },
-    { label: 'Cold mass', color: 'var(--copper)', shape: 'dot' },
+    { label: 'Copper former', color: 'var(--copper)', shape: 'dot' },
+    { label: 'LN₂ coolant channel (schematic bore)', color: '#9ad9e7', shape: 'dot' },
   ];
 }

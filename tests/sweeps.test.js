@@ -75,6 +75,20 @@ describe('pressure sweep', () => {
     const dull = pressureSweep({ ...DEFAULT_INPUTS, eps_al: 0.5 }, { count: 20 });
     assert.greater(dull[0].result.Q, shiny[0].result.Q, 'emissivity must move the whole curve');
   });
+
+  it('recomputes all three branch results at each pressure and responds to layers', () => {
+    const thin = pressureSweep({ ...DEFAULT_INPUTS, n_mli: 2 }, { min: 0.1, max: 1, count: 3 });
+    const thick = pressureSweep({ ...DEFAULT_INPUTS, n_mli: 20 }, { min: 0.1, max: 1, count: 3 });
+    for (let i = 0; i < thin.length; i++) {
+      const a = thin[i].result, b = thick[i].result;
+      assert.equal(a.regime, 'transition');
+      assert.less(b.k_eff_gas, a.k_eff_gas);
+      assert.greater(b.R_rad, a.R_rad);
+      assert.greater(b.R_solid_MLI, a.R_solid_MLI);
+      assert.near(a.Q_gas + a.Q_rad_vacuum + a.Q_solid_MLI, a.Q, a.Q * 1e-4);
+      assert.near(b.Q_gas + b.Q_rad_vacuum + b.Q_solid_MLI, b.Q, b.Q * 1e-4);
+    }
+  });
 });
 
 describe('MLI sweep', () => {
@@ -106,6 +120,18 @@ describe('MLI sweep', () => {
     const change = (custom[0].result.Q - custom[1].result.Q) / custom[0].result.Q;
     assert.greater(change, 0.5, 'MLI should matter when radiation dominates');
   });
+
+  it('evaluates the three pathways across an MLI sweep', () => {
+    const points = mliSweep(DEFAULT_INPUTS, { layers: [0, 1, 4, 20], pressure: 0.75 });
+    assert.equal(points[0].result.Q_solid_MLI, 0);
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1].result, r = points[i].result;
+      assert.greater(r.Q_solid_MLI, 0);
+      assert.greater(r.R_rad, prev.R_rad);
+      assert.greater(r.R_gas, prev.R_gas);
+      assert.near(r.Q_gas + r.Q_rad_vacuum + r.Q_solid_MLI, r.Q, r.Q * 1e-4);
+    }
+  });
 });
 
 describe('parameter sweep', () => {
@@ -118,6 +144,13 @@ describe('parameter sweep', () => {
 });
 
 describe('inverse lookup: pressure for a target heat leak', () => {
+  it('finds the approved illustrative default target of 2.2 W/m', () => {
+    const found = findPressureForHeatLeak(DEFAULT_INPUTS, 2.2);
+    assert.ok(found.found, found.reason);
+    assert.near(found.result.Q_per_length, 2.2, 2.2e-5);
+    assert.ok(found.result.finite && found.result.converged);
+  });
+
   it('finds a pressure that reproduces the target', () => {
     const target = 5.0; // W/m
     const found = findPressureForHeatLeak(DEFAULT_INPUTS, target);

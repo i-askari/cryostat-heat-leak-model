@@ -66,6 +66,13 @@ describe('validation', () => {
     assert.equal(validateInputs(withInputs({ T_cold: DEFAULT_INPUTS.T_amb - 1 })).errors.length, 0);
   });
 
+  it('requires a positive coolant temperature after the prescribed offset', () => {
+    for (const T_cold of [0, 0.005, 0.01]) {
+      assert.ok(validateInputs(withInputs({ T_cold })).errors.some((e) => e.key === 'T_cold'));
+    }
+    assert.equal(validateInputs(withInputs({ T_cold: 0.02 })).errors.length, 0);
+  });
+
   it('rejects emissivity outside (0, 1]', () => {
     assert.ok(validateInputs(withInputs({ eps_al: 0 })).errors.some((e) => e.key === 'eps_al'));
     assert.ok(validateInputs(withInputs({ eps_al: 1.5 })).errors.some((e) => e.key === 'eps_al'));

@@ -1,5 +1,6 @@
 import { assert, describe, it } from './harness.js';
 import { DEFAULT_INPUTS, SIGMA, K_B } from '../src/model/constants.js';
+import { innerGapConductivity } from '../src/model/gas.js';
 import { resolveGeometry } from '../src/model/geometry.js';
 import {
   ambientResistance,
@@ -8,6 +9,7 @@ import {
   parallel,
   radiationResistance,
   series,
+  solidMliResistance,
   vacuumGasResistance,
 } from '../src/model/resistances.js';
 
@@ -30,6 +32,27 @@ describe('cylindrical conduction', () => {
     const Riw = cylindricalConductionResistance(geom.r_in_ow, geom.r_in_in, DEFAULT_INPUTS.k_inner_wall, geom.length);
     assert.close(Row, Math.log(geom.r_ow_ow / geom.r_ow_in) / (2 * Math.PI * DEFAULT_INPUTS.k_outer_wall * geom.length), 1e-12);
     assert.close(Riw, Math.log(geom.r_in_ow / geom.r_in_in) / (2 * Math.PI * DEFAULT_INPUTS.k_inner_wall * geom.length), 1e-12);
+  });
+});
+
+describe('MLI solid/contact conduction', () => {
+  it('matches the empirical notebook coefficient, temperature and inner-cylinder area', () => {
+    const hot = 284, cold = 116, n = 12;
+    const area = 2 * Math.PI * geom.r_in_ow * geom.length;
+    const expected = 2 * (n + 1) / (8.95e-8 * 20 ** 2.63 * (hot + cold) * area);
+    assert.close(solidMliResistance(hot, cold, n, geom), expected, 1e-15);
+  });
+
+  it('eliminates the contact branch for zero layers, unlike the notebook', () => {
+    assert.equal(solidMliResistance(284, 116, 0, geom), Infinity);
+  });
+
+  it('scales with N+1, temperature sum, inner radius and section length', () => {
+    const base = solidMliResistance(284, 116, 3, geom);
+    assert.close(solidMliResistance(284, 116, 7, geom), 2 * base, 1e-15);
+    assert.close(solidMliResistance(568, 232, 3, geom), base / 2, 1e-15);
+    assert.close(solidMliResistance(284, 116, 3, { ...geom, length: geom.length * 2 }), base / 2, 1e-15);
+    assert.close(solidMliResistance(284, 116, 3, { ...geom, r_in_ow: geom.r_in_ow * 2 }), base / 2, 1e-15);
   });
 });
 
@@ -117,11 +140,47 @@ describe('gas gaps', () => {
       (Math.SQRT2 * Math.PI * DEFAULT_INPUTS.d_air ** 2 * DEFAULT_INPUTS.P_inner_gap);
     const kn = lambda / geom.d_inner_gap;
     assert.ok(kn > 0.01 && kn < 10, 'toy case must use the transition formula');
-    const k = DEFAULT_INPUTS.k_air / (1 + DEFAULT_INPUTS.C * kn);
+    const k0 = 0.0241 * (DEFAULT_INPUTS.T_inner_gap / 273.15) ** 0.81;
+    const k = k0 / (1 + DEFAULT_INPUTS.C * kn);
     const R = Math.log(geom.r_in_in / geom.r_cu) / (2 * Math.PI * k * geom.length);
     assert.close(Kn_gap, kn, 1e-12);
     assert.close(k_eff_gap, k, 1e-12);
     assert.close(R_gap, R, 1e-12);
+  });
+
+  it('uses the notebook conductivity at 90 K and the chosen public gap temperature otherwise', () => {
+    for (const T of [90, DEFAULT_INPUTS.T_inner_gap, 140]) {
+      assert.close(innerGapConductivity(T), 0.0241 * (T / 273.15) ** 0.81, 1e-15);
+      const input = { ...DEFAULT_INPUTS, T_inner_gap: T };
+      const { k_eff_gap, Kn_gap } = innerGapResistance(input, geom);
+      assert.close(k_eff_gap, innerGapConductivity(T) / (1 + input.C * Kn_gap), 1e-12);
+    }
+  });
+
+  it('independently reproduces all inner-gap gas regimes at its own pressure', () => {
+    for (const [pressure, expectedRegime] of [[1e-5, 'free-molecular'], [10, 'transition'], [1e7, 'continuum']]) {
+      const input = { ...DEFAULT_INPUTS, P_inner_gap: pressure };
+      const actual = innerGapResistance(input, geom);
+      const lambda = K_B * input.T_inner_gap / (Math.SQRT2 * Math.PI * input.d_air ** 2 * pressure);
+      const Kn = lambda / geom.d_inner_gap;
+      const kAir = 0.0241 * (input.T_inner_gap / 273.15) ** 0.81;
+      const regime = Kn < 0.01 ? 'continuum' : (Kn > 10 ? 'free-molecular' : 'transition');
+      const k = regime === 'continuum' ? kAir
+        : regime === 'free-molecular' ? kAir * geom.d_inner_gap / (input.C * lambda)
+          : kAir / (1 + input.C * Kn);
+      assert.equal(regime, expectedRegime);
+      assert.close(actual.lambda_gap, lambda, 1e-12);
+      assert.close(actual.Kn_gap, Kn, 1e-12);
+      assert.close(actual.k_eff_gap, k, 1e-12);
+      assert.close(actual.R_gap, Math.log(geom.r_in_in / geom.r_cu) / (2 * Math.PI * k * geom.length), 1e-12);
+    }
+  });
+
+  it('does not apply MLI to the separate inner gas gap', () => {
+    const a = innerGapResistance({ ...DEFAULT_INPUTS, n_mli: 0 }, geom);
+    const b = innerGapResistance({ ...DEFAULT_INPUTS, n_mli: 80 }, geom);
+    assert.equal(a.k_eff_gap, b.k_eff_gap);
+    assert.equal(a.R_gap, b.R_gap);
   });
 
   it('leaves the inner gap unchanged when the main vacuum pressure changes', () => {

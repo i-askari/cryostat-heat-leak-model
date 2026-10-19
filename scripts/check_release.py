@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +27,90 @@ def fail(message):
 
 def rel(path):
     return str(path.relative_to(ROOT))
+
+
+def check_screenshot_png(content):
+    """Validate the single screenshot asset; visual privacy still needs review.
+
+    Accept only non-interlaced 8-bit RGB/RGBA screenshots and PNG structural or
+    numeric colour chunks. Text, profiles, physical dimensions, timestamps,
+    unknown chunks, and data after IEND are rejected rather than ignored.
+    """
+    if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("bad PNG signature")
+
+    offset = 8
+    header = None
+    seen = set()
+    idat_parts = []
+    ended = False
+    while offset < len(content):
+        if len(content) - offset < 12:
+            raise ValueError("truncated PNG chunk")
+        length = int.from_bytes(content[offset:offset + 4], "big")
+        kind = content[offset + 4:offset + 8]
+        end = offset + 12 + length
+        if end > len(content):
+            raise ValueError("truncated PNG chunk data")
+        data = content[offset + 8:offset + 8 + length]
+        expected_crc = int.from_bytes(content[offset + 8 + length:end], "big")
+        if zlib.crc32(kind + data) != expected_crc:
+            raise ValueError("PNG chunk CRC mismatch")
+        if kind not in (b"IHDR", b"IDAT", b"IEND", b"sRGB", b"gAMA", b"cHRM"):
+            raise ValueError("unapproved PNG chunk {!r}".format(kind))
+        if header is None and kind != b"IHDR":
+            raise ValueError("IHDR must be the first chunk")
+        if kind != b"IDAT" and kind in seen:
+            raise ValueError("duplicate PNG chunk {!r}".format(kind))
+        if kind == b"IHDR":
+            if len(data) != 13:
+                raise ValueError("invalid IHDR length")
+            width = int.from_bytes(data[0:4], "big")
+            height = int.from_bytes(data[4:8], "big")
+            bit_depth, color_type, compression, filtering, interlace = data[8:13]
+            if (not 1 <= width <= 16384 or not 1 <= height <= 16384 or
+                    bit_depth != 8 or color_type not in (2, 6) or
+                    (compression, filtering, interlace) != (0, 0, 0)):
+                raise ValueError("unsupported screenshot dimensions or PNG format")
+            stride = width * (3 if color_type == 2 else 4)
+            if (stride + 1) * height > 150_000_000:
+                raise ValueError("screenshot image data is too large to inspect")
+            header = (stride, height)
+        elif kind in (b"sRGB", b"gAMA", b"cHRM"):
+            if idat_parts:
+                raise ValueError("PNG colour chunk appears after image data")
+            lengths = {b"sRGB": 1, b"gAMA": 4, b"cHRM": 32}
+            if len(data) != lengths[kind] or (kind == b"sRGB" and data[0] > 3):
+                raise ValueError("invalid PNG colour chunk")
+        elif kind == b"IDAT":
+            if b"IDAT-ended" in seen:
+                raise ValueError("non-consecutive IDAT chunks")
+            idat_parts.append(data)
+        elif kind == b"IEND":
+            if data or not idat_parts or end != len(content):
+                raise ValueError("invalid IEND or trailing data")
+            ended = True
+        if kind != b"IDAT" and idat_parts and kind != b"IEND":
+            seen.add(b"IDAT-ended")
+        seen.add(kind)
+        offset = end
+        if ended:
+            break
+    if header is None or not ended:
+        raise ValueError("missing PNG image or IEND")
+
+    stride, height = header
+    expected = (stride + 1) * height
+    try:
+        decoder = zlib.decompressobj()
+        pixels = decoder.decompress(b"".join(idat_parts), expected + 1)
+    except zlib.error as exc:
+        raise ValueError("invalid PNG image data") from exc
+    if (len(pixels) != expected or not decoder.eof or decoder.unused_data or
+            decoder.unconsumed_tail):
+        raise ValueError("invalid PNG image data length or stream")
+    if any(pixels[row * (stride + 1)] > 4 for row in range(height)):
+        raise ValueError("invalid PNG scanline filter")
 
 
 def inventory():
@@ -53,6 +138,14 @@ def inventory():
                 continue
             try:
                 content = path.read_bytes()
+                if rel(path) == "docs/assets/application.png":
+                    try:
+                        check_screenshot_png(content)
+                    except ValueError as exc:
+                        fail("{}: invalid screenshot PNG: {}".format(rel(path), exc))
+                    else:
+                        notes.append("checked screenshot structure and metadata chunks; visual and provenance review still required")
+                    continue
                 if b"\0" in content:
                     raise ValueError("binary content")
                 source = content.decode("utf-8")
@@ -60,6 +153,8 @@ def inventory():
                 fail("{}: binary or unreadable file requires manual review".format(rel(path)))
                 continue
             files.append((path, source))
+    if not (ROOT / "docs" / "assets" / "application.png").is_file():
+        fail("docs/assets/application.png: required screenshot is missing")
     notes.append("inventoried {} text files, including hidden and extensionless files".format(len(files)))
 
 

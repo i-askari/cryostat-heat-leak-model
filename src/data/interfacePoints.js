@@ -34,7 +34,7 @@ export const INTERFACE_POINTS = [
   {
     key: 'T1',
     symbol: 'T1',
-    name: 'Outer wall, outside',
+    name: 'Outer Wall, Outer Radius',
     where: 'convection and radiation',
     color: 'var(--warm)',
     solved: true,
@@ -42,7 +42,7 @@ export const INTERFACE_POINTS = [
   {
     key: 'T2',
     symbol: 'T2',
-    name: 'Outer wall, bore',
+    name: 'Outer Wall, Inner Radius',
     where: 'faces the vacuum gap',
     color: 'var(--convection)',
     solved: true,
@@ -50,7 +50,7 @@ export const INTERFACE_POINTS = [
   {
     key: 'T3',
     symbol: 'T3',
-    name: 'Inner wall, outside',
+    name: 'Inner Wall, Outer Radius',
     where: 'faces the vacuum gap',
     color: 'var(--regime-transition)',
     solved: true,
@@ -58,7 +58,7 @@ export const INTERFACE_POINTS = [
   {
     key: 'T4',
     symbol: 'T4',
-    name: 'Inner wall, bore',
+    name: 'Inner Wall, Inner Radius',
     where: 'faces the inner gas gap',
     color: 'var(--cold)',
     solved: true,
@@ -66,8 +66,8 @@ export const INTERFACE_POINTS = [
   {
     key: 'T_cold',
     symbol: '—',
-    name: 'Cold mass',
-    where: 'fixed boundary',
+    name: 'Copper former, outer surface',
+    where: 'prescribed model boundary',
     color: 'var(--cold)',
     solved: false,
   },

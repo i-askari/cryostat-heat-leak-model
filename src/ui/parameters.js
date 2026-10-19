@@ -15,6 +15,7 @@
  */
 
 import { resolveGeometry } from '../model/geometry.js';
+import { COPPER_COOLANT_OFFSET } from '../model/constants.js';
 import { milliTorrToPa, mmToM, mToMm, paToMilliTorr } from '../model/units.js';
 import { el, replace } from '../utils/dom.js';
 import { millimetres, sig } from '../utils/format.js';
@@ -27,7 +28,7 @@ const mtorr = {
 
 /** @type {import('./controls.js').ControlSpec[]} */
 const GEOMETRY = [
-  { key: 'r_cu', label: 'Cold mass radius', min: 1, max: 60, step: 0.5, ...mm },
+  { key: 'r_cu', label: 'Copper former outer radius', min: 1, max: 60, step: 0.5, ...mm },
   { key: 'd_inner_gap', label: 'Inner gas gap', min: 0.5, max: 40, step: 0.5, ...mm },
   { key: 't_inner_wall', label: 'Inner wall thickness', min: 0.2, max: 20, step: 0.1, ...mm },
   { key: 'd_vacuum_gap', label: 'Vacuum gap', min: 1, max: 100, step: 0.5, ...mm },
@@ -42,17 +43,23 @@ const GEOMETRY = [
 const THERMAL = [
   { key: 'T_amb', label: 'Ambient temperature', unit: 'K', min: 200, max: 400, step: 1, decimals: 1 },
   {
-    key: 'T_cold', label: 'Cold boundary', unit: 'K', min: 4, max: 290, step: 1, decimals: 1,
-    hint: 'The cold mass is held at this temperature throughout.',
+    key: 'T_cold', label: 'LN₂ coolant temperature', unit: 'K', min: 4, max: 290, step: 0.1, decimals: 2,
+    toDisplay: (v) => v - COPPER_COOLANT_OFFSET,
+    fromDisplay: (v) => v + COPPER_COOLANT_OFFSET,
+    hint: 'The modeled boundary is the copper outer surface, prescribed 0.01 K above this coolant temperature. The copper temperature profile is not solved.',
   },
 ];
 
 /** @type {import('./controls.js').ControlSpec[]} */
 const VACUUM = [
-  { key: 'P_vacuum', label: 'Vacuum gap pressure', min: 1e-6, max: 7.6e5, ...mtorr },
+  { key: 'P_vacuum', label: 'Main vacuum-gap pressure', min: 1e-6, max: 7.6e5, ...mtorr },
   {
     key: 'P_inner_gap', label: 'Inner gap pressure', min: 1e-3, max: 7.6e5, ...mtorr,
     hint: 'Held fixed: this volume is not swept with the main vacuum.',
+  },
+  {
+    key: 'T_inner_gap', label: 'Inner gap gas temp.', unit: 'K', min: 20, max: 300, step: 1,
+    decimals: 1, hint: 'Representative temperature for inner-gap mean free path and gas conductivity.',
   },
 ];
 
@@ -72,7 +79,11 @@ const INSULATION = [
 const MATERIALS = [
   { key: 'k_outer_wall', label: 'Outer wall k', unit: 'W/mK', min: 1, max: 400, step: 1, decimals: 1 },
   { key: 'k_inner_wall', label: 'Inner wall k', unit: 'W/mK', min: 1, max: 400, step: 1, decimals: 1 },
-  { key: 'k_air', label: 'Gas conductivity', unit: 'W/mK', min: 0.005, max: 0.2, step: 0.001, decimals: 4 },
+  {
+    key: 'k_air', label: 'Main-gap gas conductivity', unit: 'W/mK',
+    min: 0.005, max: 0.2, step: 0.001, decimals: 4,
+    hint: 'The inner gap uses its own temperature-dependent gas conductivity.',
+  },
   { key: 'h_conv', label: 'External h', unit: 'W/m²K', min: 1, max: 50, step: 0.5, decimals: 1 },
 ];
 
@@ -93,15 +104,11 @@ const ADVANCED = [
     min: 0.2, max: 1.0, step: 0.01, decimals: 3,
     hint: 'Used by the kinetic-theory mean free path in the inner gap.',
   },
-  {
-    key: 'T_inner_gap', label: 'Inner gap gas temp.', unit: 'K', min: 20, max: 300, step: 1,
-    decimals: 1, hint: 'Representative temperature for the inner gap mean free path.',
-  },
 ];
 
 /** Radii shown read-only beneath the geometry controls. */
 const DERIVED_RADII = [
-  ['Cold mass radius', 'r_cu'],
+  ['Copper former outer radius', 'r_cu'],
   ['Inner wall bore', 'r_in_in'],
   ['Inner wall outside', 'r_in_ow'],
   ['Outer wall bore', 'r_ow_in'],
@@ -141,6 +148,7 @@ function mount(host, store) {
     derivedRow('Vacuum gap, in Pa', ''),
     derivedRow('Inner gap, in Pa', ''),
   ];
+  const copperTemperatureRow = derivedRow('Copper outer surface (prescribed)', '');
 
   replace(
     host,
@@ -149,7 +157,7 @@ function mount(host, store) {
       el('div', { style: { marginTop: '8px' } }, radiiRows.map((r) => r.node)),
     ]),
 
-    group('Boundary conditions', THERMAL.map(build)),
+    group('Boundary conditions', [...THERMAL.map(build), copperTemperatureRow.node]),
 
     group('Vacuum', [
       ...VACUUM.map(build),
@@ -189,6 +197,7 @@ function mount(host, store) {
 
     pressureRows[0].set(`${sig(inputs.P_vacuum, 3)} Pa`);
     pressureRows[1].set(`${sig(inputs.P_inner_gap, 3)} Pa`);
+    copperTemperatureRow.set(Number.isFinite(inputs.T_cold) ? `${inputs.T_cold.toFixed(2)} K` : '—');
   };
 
   return { host, update };
