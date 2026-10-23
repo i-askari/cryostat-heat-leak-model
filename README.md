@@ -4,8 +4,6 @@ https://i-askari.github.io/cryostat-heat-leak-model/
 
 [![Application showing the illustrative cryostat model](docs/assets/application.png)](docs/assets/application.png)
 
-*The application at its illustrative defaults; select the image to view it at full size.*
-
 ## Overview
 
 I developed a steady-state radial thermal-resistance model to investigate heat
